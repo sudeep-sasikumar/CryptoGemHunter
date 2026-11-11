@@ -24,15 +24,18 @@ import time
 from collections import deque
 
 from . import factors as F
+from . import narrative as N
 from .db import DB
 from .http import Http
 from .model import Model, train
 from .notify import Telegram, entry_text, esc, event_text, message_ids, money
 from .scoring import gates, scorecard
 from .sources.dexscreener import DexScreener
-from .sources.extra import GoPlus, Market
+from .sources.extra import Gecko, GoPlus, Market
 from .sources.gmgn import Gmgn
+from .sources.social import Social
 from .trade import Event, Follow, Position
+from .tuning import tune
 from .wallets import History
 
 log = logging.getLogger("engine")
@@ -43,7 +46,7 @@ class Tok:
     __slots__ = ("id", "chain", "address", "symbol", "name", "launchpad", "creator", "lists", "lists_ts", "dex", "dex_ts",
                  "deep", "deep_ts", "price", "mcap", "liq", "price_ts", "poll_ts", "obs", "first_seen", "scope_ts",
                  "snap_ts", "n_snaps", "follows", "early", "score", "gate", "good", "bad", "eval_ts", "bar_ts", "peak_mcap",
-                 "saved_ts", "groups")
+                 "saved_ts", "groups", "tg", "web")
 
     def __init__(self, chain: str, address: str, now: float):
         self.id, self.chain, self.address = f"{chain}:{address}", chain, address
@@ -61,6 +64,7 @@ class Tok:
         self.score, self.gate, self.good, self.bad, self.groups = None, None, [], [], {}
         self.eval_ts = self.bar_ts = self.saved_ts = 0.0
         self.peak_mcap = None
+        self.tg = self.web = None
 
 
 class Engine:
@@ -73,6 +77,12 @@ class Engine:
         self.dex = DexScreener(self.http, cfg.sources.dexscreener)
         self.goplus = GoPlus(self.http, cfg.sources.goplus)
         self.market = Market(self.http)
+        self.gecko = Gecko(self.http, cfg.sources.gecko)
+        self.social = Social(self.http, cfg.sources.social)
+        self.meta = N.Meta()
+        self.context: dict[str, dict] = {}                # per chain: where money is flowing
+        self.pad_rate: dict[str, float] = {}
+        self.context_ts = 0.0
         self.telegram = Telegram(cfg.telegram, cfg.secret("TELEGRAM_BOT_TOKEN"), cfg.secret("TELEGRAM_CHAT_ID"), self.db)
         self.history = History(self.db, cfg.learn.wallets)
         self.toks: dict[str, Tok] = {}
@@ -82,6 +92,7 @@ class Engine:
         self.deep_times: deque = deque(maxlen=500)
         self.model: Model | None = None
         self.last_train: dict = self.db.get("last_train", {}) or {}
+        self.tuning: dict = self.db.get("tuning", {}) or {}        # scorecard multipliers learned so far
         self.retraining: dict | bool = False
         self.started = time.time()
         self.counts = {"rank": 0, "trench": 0, "signals": 0, "trades": 0, "snapshots": 0, "deep": 0, "calls": 0, "labels": 0}
@@ -118,8 +129,10 @@ class Engine:
         for r in self.db.query("SELECT * FROM snapshots WHERE done=0"):
             tok = self.toks.get(r["token_id"])
             if tok and r["entry_price"]:
-                tok.follows.append(Follow(r["id"], r["entry_price"], r["ts"], r["mcap"], r["peak_mult"] or 1.0, r["min_mult"] or 1.0,
-                                          r["end_mult"] or 1.0, bool(r["hit"]), bool(r["stopped"]), r["t_hit"], r["t_stop"], r["t_peak"]))
+                fl = Follow(r["id"], r["entry_price"], r["ts"], r["mcap"], r["peak_mult"] or 1.0, r["min_mult"] or 1.0,
+                            r["end_mult"] or 1.0, bool(r["hit"]), bool(r["stopped"]), r["t_hit"], r["t_stop"], r["t_peak"])
+                fl.fast, fl.t_fast = r["fast_hit"], r["t_fast"]
+                tok.follows.append(fl)
         for r in self.db.query("SELECT * FROM calls WHERE status='open'"):
             p = Position(r["id"], r["token_id"], r["ts"], r["entry_price"], r["entry_mcap"], r["entry_liq"],
                          r["peak_mult"] or 1.0, r["peak_mcap"], r["last_mult"] or 1.0, r["last_mcap"], r["last_ts"] or r["ts"])
@@ -159,7 +172,13 @@ class Engine:
         tok.creator = f.get("_creator") or tok.creator
         if self.in_scope(mcap):
             tok.scope_ts = now
-        tok.obs.append((now, f.get("h_holders"), f.get("h_top10_pct"), mcap))
+        tok.tg, tok.web = f.get("_tg") or tok.tg, f.get("_web") or tok.web
+        last = tok.obs[-1] if tok.obs else (0,) * 8        # the two lists carry different fields: keep the last known
+        tok.obs.append((now, f.get("h_holders") or last[1], f.get("h_top10_pct") if f.get("h_top10_pct") is not None else last[2],
+                        mcap, f.get("a_tg_calls") if f.get("a_tg_calls") is not None else last[4],
+                        f.get("a_callouts") if f.get("a_callouts") is not None else last[5],
+                        f.get("a_visits") if f.get("a_visits") is not None else last[6],
+                        f.get("a_x_followers") if f.get("a_x_followers") is not None else last[7]))
         if now - tok.dex_ts > 300 and f.get("_price"):          # DexScreener has not priced it: GMGN's price follows it
             self.on_price(tok, f["_price"], mcap, f.get("l_liq_usd"), now)
         return tok
@@ -180,11 +199,24 @@ class Engine:
         F.put(f, F.from_history(list(tok.obs)))
         F.put(f, self.market.factors(tok.chain))
         F.put(f, self.history.factors(tok.id, tok.creator, tok.early))
+        # narrative, meme shape, original-or-copy, where money is rotating: measured from the watched market itself
+        ws = N.words(tok.symbol, tok.name)
+        f["narrative"] = N.theme(ws | N.words(f.get("_desc")), f.get("_cg_categories"))
+        F.put(f, N.shape(tok.symbol, tok.name, f.get("_desc") or "", f.get("_logo")))
+        F.put(f, self.meta.factors(tok.id, ws))
+        if tok.symbol:
+            twins = self.db.one("SELECT COUNT(*) n, MIN(created_ts) oldest FROM tokens WHERE symbol=? COLLATE NOCASE AND id!=?",
+                                (tok.symbol, tok.id))
+            f["a_symbol_twins_n"] = twins["n"]
+            if twins["n"] and f.get("_created"):
+                f["a_symbol_oldest"] = int(twins["oldest"] is None or f["_created"] <= twins["oldest"])
+        F.put(f, self.context.get(tok.chain))
+        F.put(f, {"m_pad_fast_rate_7d": self.pad_rate.get(tok.launchpad or "none")})
         return F.derive(f, now)
 
     def judge(self, f: dict, final: bool = False):
         bad_gates = gates(f, self.cfg.gates, self.cfg.scope, final=final)
-        score, groups, good, bad = scorecard(f, self.cfg.score.weights)
+        score, groups, good, bad = scorecard(f, self.cfg.score.weights, self.tuning)
         prob = None
         if self.model is not None:
             try:
@@ -221,9 +253,9 @@ class Engine:
         self.counts["labels"] += 1
         self.db.execute(
             "UPDATE snapshots SET done=1, hit=?, stopped=?, peak_mult=?, min_mult=?, end_mult=?, peak_mcap=?, t_hit=?, t_stop=?, "
-            "t_peak=?, end_reason=?, done_ts=?, last_ts=? WHERE id=?",
+            "t_peak=?, end_reason=?, done_ts=?, last_ts=?, fast_hit=?, t_fast=? WHERE id=?",
             (int(fl.hit), int(fl.stopped), fl.peak, fl.low, fl.last, (fl.entry_mcap or 0) * fl.peak or None, fl.t_hit, fl.t_stop,
-             fl.t_peak, fl.reason, now, now, fl.snap_id))
+             fl.t_peak, fl.reason, now, now, fl.fast, fl.t_fast, fl.snap_id))
 
     def flush(self, now: float) -> None:
         """Write what changed since the last flush: running labels, open calls, token rows."""
@@ -232,7 +264,8 @@ class Engine:
             for fl in tok.follows:
                 if fl.dirty:
                     fl.dirty = False
-                    rows.append((int(fl.hit), int(fl.stopped), fl.peak, fl.low, fl.last, fl.t_hit, fl.t_stop, fl.t_peak, now, fl.snap_id))
+                    rows.append((int(fl.hit), int(fl.stopped), fl.peak, fl.low, fl.last, fl.t_hit, fl.t_stop, fl.t_peak, now,
+                                 fl.fast, fl.t_fast, fl.snap_id))
             if tok.price_ts > tok.saved_ts or tok.lists_ts > tok.saved_ts:
                 tok.saved_ts = now
                 self.db.execute(
@@ -242,7 +275,7 @@ class Engine:
                      tok.price, tok.liq, tok.lists.get("_created"), tok.lists.get("_opened"), now, tok.id))
         if rows:
             self.db.executemany("UPDATE snapshots SET hit=?, stopped=?, peak_mult=?, min_mult=?, end_mult=?, t_hit=?, t_stop=?, "
-                                "t_peak=?, last_ts=? WHERE id=?", rows)
+                                "t_peak=?, last_ts=?, fast_hit=?, t_fast=? WHERE id=?", rows)
         for p in self.positions.values():
             self.db.execute("UPDATE calls SET peak_mult=?, peak_mcap=?, last_mult=?, last_mcap=?, last_ts=?, state=? WHERE id=?",
                             (p.peak, p.peak_mcap, p.last, p.last_mcap, p.last_ts, json.dumps(p.state()), p.call_id))
@@ -314,8 +347,14 @@ class Engine:
             F.put(deep, F.from_security(sec))
         if tok.chain != "sol":
             F.put(deep, await self.goplus.check(tok.chain, tok.address))
+        try:                                               # free public sources: no GMGN budget is spent here
+            F.put(deep, await self.social.look(tok.chain, tok.address, deep.get("_tg") or tok.tg, deep.get("_web") or tok.web))
+        except Exception:   # noqa: BLE001 - creator-supplied links must never stop a deep look
+            log.exception("social look %s failed", tok.id)
         price = deep.get("_price") or tok.price
-        candles = await self.gmgn.kline(tok.chain, tok.address, d.kline.resolution, d.kline.days)
+        candles = await self.gecko.candles(tok.chain, (tok.dex or {}).get("_pool"), int(d.kline.days * 24))    # free
+        if not candles:
+            candles = await self.gmgn.kline(tok.chain, tok.address, d.kline.resolution, d.kline.days)
         if candles:
             F.put(deep, F.from_kline(candles, price, deep.get("_created") or tok.lists.get("_created"), d.kline.days))
         if d.created_tokens and tok.creator:
@@ -333,6 +372,7 @@ class Engine:
             tok.early = buyers
             self.history.record_early(tok.id, buyers)
         deep["deep_holders"], deep["deep_traders"] = int(bool(holders)), int(bool(traders))
+        deep["deep_page"], deep["deep_candles"] = int(bool(info)), int(bool(candles))
         tok.deep, now = deep, time.time()
         f = self.factors(tok, now)
         bad_gates, score, groups, good, bad, prob = self.judge(f, final=True)
@@ -504,6 +544,10 @@ class Engine:
         await asyncio.sleep(60)
         while True:
             now, n = time.time(), 0
+            self.meta.rebuild((t.id, N.words(t.symbol, t.name), (t.dex or {}).get("f_vol_1h") or t.lists.get("g_vol_1h"))
+                              for t in self.toks.values() if now - t.scope_ts < 3600)
+            if now - self.context_ts > 600:
+                self.refresh_context(now)
             for tok in list(self.toks.values()):
                 if tok.lists_ts > tok.eval_ts and tok.lists:
                     try:
@@ -529,6 +573,27 @@ class Engine:
                     log.exception("deep look %s failed", tok.id)
                     self.errors.append((time.time(), f"deep look: {type(e).__name__}"))
             await asyncio.sleep(30)
+
+    def refresh_context(self, now: float) -> None:
+        """Chain rotation and launchpad health from this program's own records: where the watched volume is, and
+        how often recent snapshots on each chain / launchpad got a fast hit. Past outcomes only."""
+        self.context_ts = now
+        vol: dict[str, float] = {}
+        for t in self.toks.values():
+            vol[t.chain] = vol.get(t.chain, 0.0) + float((t.dex or {}).get("f_vol_1h") or t.lists.get("g_vol_1h") or 0.0)
+        total = sum(vol.values())
+        ctx = {c: {"m_chain_vol_share": v / total} for c, v in vol.items()} if total > 0 else {}
+        for r in self.db.query("SELECT t.chain c, COUNT(*) n, AVG(s.fast_hit) r FROM snapshots s JOIN tokens t ON t.id=s.token_id "
+                               "WHERE s.fast_hit IS NOT NULL AND s.ts>? GROUP BY t.chain", (now - 3 * 86400,)):
+            if r["n"] >= 30:
+                ctx.setdefault(r["c"], {})["m_chain_fast_rate_3d"] = r["r"]
+        self.context = ctx
+        self.pad_rate = {r["p"] or "none": r["r"] for r in self.db.query(
+            "SELECT t.launchpad p, COUNT(*) n, AVG(s.fast_hit) r FROM snapshots s JOIN tokens t ON t.id=s.token_id "
+            "WHERE s.fast_hit IS NOT NULL AND s.ts>? GROUP BY t.launchpad", (now - 7 * 86400,)) if r["n"] >= 20}
+        self.meta.set_winners((r["symbol"], r["name"]) for r in self.db.query(
+            "SELECT DISTINCT t.symbol, t.name FROM snapshots s JOIN tokens t ON t.id=s.token_id "
+            "WHERE (s.fast_hit=1 OR s.hit=1) AND s.ts>?", (now - 7 * 86400,)))
 
     async def loop_safety(self) -> None:
         s = self.cfg.trade.safety
@@ -564,6 +629,10 @@ class Engine:
     async def loop_market(self) -> None:
         while True:
             await self.market.refresh()
+            try:
+                await self.social.refresh_llama()
+            except Exception:   # noqa: BLE001
+                log.exception("DefiLlama refresh failed")
             await asyncio.sleep(self.cfg.sources.market.every_s)
 
     async def loop_maintain(self) -> None:
@@ -675,6 +744,34 @@ class Engine:
         log.info("retrain: %s", report.get("note") or report.get("verdict") or "done")
         return report
 
+    async def retune(self) -> dict:
+        """Re-weight the scorecard from the grades so far (tuning.py). Small steps, from the first winners on."""
+        self.flush(time.time())
+        t = await asyncio.to_thread(tune, self.db.path, dict(self.cfg.score.weights), dict(self.cfg.learn.tune))
+        if t.get("items"):
+            self.tuning = t
+            self.db.put("tuning", t)
+        self.db.put("tuning_last", {"ts": t["ts"], "n": t["n"], "pos": t["pos"], "note": t.get("note")})
+        self.db.commit()
+        log.info("scorecard tuning: %s", t.get("note"))
+        return t
+
+    async def loop_tune(self) -> None:
+        every = float(self.cfg.learn.tune.every_h) * 3600
+        while True:
+            await asyncio.sleep(300)
+            if not self.cfg.learn.tune.enabled:
+                continue
+            last = self.db.get("tuning_last") or {}
+            # until the first tuning exists, look every half hour: it starts as soon as the first winners are graded
+            if time.time() - (last.get("ts") or 0) < (every if self.tuning else min(every, 1800)):
+                continue
+            try:
+                await self.retune()
+            except Exception:   # noqa: BLE001
+                log.exception("scorecard tuning failed")
+                self.db.put("tuning_last", {"ts": time.time(), "note": "failed"})
+
     async def loop_learn(self) -> None:
         while True:
             await asyncio.sleep(600)
@@ -701,9 +798,11 @@ class Engine:
             "by_chain": {c: sum(1 for t in self.toks.values() if t.chain == c) for c in self.cfg.chains},
             "last_sweep_s": {c: round(now - ts) for c, ts in self.sweep_ts.items()},
             "counts": self.counts, "model": self.model.ver if self.model else None,
-            "deciding": "model" if self.model else "scorecard", "call_threshold": self.call_threshold(now),
+            "deciding": "model" if self.model else "tuned scorecard" if self.tuning else "scorecard",
+            "call_threshold": self.call_threshold(now), "tuning": self.db.get("tuning_last"),
             "gmgn": {"enabled": g.enabled, "calls": g.calls, "weight_spent": g.spent, "errors": g.errors, "limited": g.limited,
                      "remaining": g.remaining, "backlog_s": round(g.backlog_s(), 1), "last_limit": g.last_limit,
+                     "skipped_in_ban": g.skipped,
                      "budget_per_s": g.rate, "heavy_paused_s": max(0, round(g.heavy_until - now)),
                      "unsupported": sorted(f"{p} ({c})" for p, c in g.unsupported)},
             "apis": {k: {"calls": v.calls, "errors": v.errors, "limited": v.limited} for k, v in self.http.limiters.items()},
@@ -717,7 +816,7 @@ class Engine:
         if not self.gmgn.enabled:
             log.error("GMGN_API_KEY is not set: no tokens can be found. Open calls and unfinished snapshots are still followed.")
         loops = [self.loop_rank, self.loop_trenches, self.loop_signals, self.loop_feed, self.loop_prices, self.loop_evaluate,
-                 self.loop_safety, self.loop_market, self.loop_maintain, self.loop_learn]
+                 self.loop_safety, self.loop_market, self.loop_maintain, self.loop_learn, self.loop_tune]
 
         async def guard(fn):
             while True:

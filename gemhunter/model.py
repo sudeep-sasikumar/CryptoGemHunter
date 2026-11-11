@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 log = logging.getLogger("model")
-CATEGORICAL = ("chain", "launchpad", "stage")     # stage: scan (list data only) or deep (holders, candles ...)
+CATEGORICAL = ("chain", "launchpad", "stage", "narrative")     # stage: scan (list data only) or deep (holders, candles ...)
 HALF_LIFE_DAYS = 45.0
 
 

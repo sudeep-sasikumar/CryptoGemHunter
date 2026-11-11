@@ -17,13 +17,18 @@ GMGN lists per chain (trending in range, graduated) ─► watched token ─► 
                                                                              │
                                              SNAPSHOT of every token ◄───────┤   (called or not, gated or not)
                                                                              ▼ best candidates only
-                    deep look: token page, security, candles, deployer history, holders, traders, GoPlus
+   deep look: token page, security, deployer history, holders, traders (GMGN) · candles (GeckoTerminal) · GoPlus ·
+              Telegram group, website + domain age, GitHub, CoinGecko listing, DefiLlama usage (all free)
                                                                              │ gates (final) + scorecard / model
                                                                              ▼
                               CALL ─► Telegram entry ─► trade plan on live prices ─► updates, warnings, exit
-every snapshot is followed to its outcome: 3x before -50%, within 7 days
-daily: retrain on all outcomes ─► test on the newest unseen data ─► switch only if better
+every snapshot gets two grades: FAST (1.5x before -30%, within a day) and FULL (3x before -50%, within 7 days)
+every 3 h: the scorecard re-weights itself from the fast grades (from 5 winners on)
+every 12 h: retrain a model on the full grades ─► test on the newest unseen data ─► switch only if better
 ```
+
+**Signals start on day one.** Nothing waits for a model: the scorecard calls as soon as 200 snapshots exist to rank
+against (minutes after the first start on a free key of its own; longer on a shared one, see "Known limits").
 
 Every token in range gets snapshots and grades, **not just the ones that were called**. That is what lets it learn
 from the runners it missed and the losers it avoided, and what shows whether each gate removes losers or winners.
@@ -54,12 +59,30 @@ All groups of the spec are computed in `gemhunter/factors.py`; names carry the g
 | 5 Cost basis and retention | `c_` | GMGN holders + traders lists | deep look, when the lists answer |
 | 6 Smart money and wallets | `w_`, `own_` | GMGN counts, smart-money + KOL feeds, signals, holders list, own proven wallets | feeds every token; holders at the deep look |
 | 7 Volume and order flow | `f_` | DexScreener, GMGN, traders list | every token |
-| 8 Price action and lifecycle | `p_` | GMGN candles, lists, signals | lists every token; candles at the deep look |
-| 9 Social and attention | `a_` | GMGN lists and signals | every token |
-| 10 Market context | `mk_`, `m_` | CoinGecko (BTC, native coin), time of day | every token |
+| 8 Price action and lifecycle | `p_` | GeckoTerminal hourly candles (GMGN's as fallback), lists, signals | lists every token; candles at the deep look |
+| 9 Social and attention | `a_` | GMGN lists and signals; Telegram public page; website; own sightings over time | lists every token; pages at the deep look |
+| 10 Narrative and market context | `m_`, `mk_`, `narrative` | the watched market itself; CoinGecko (BTC, native coin, categories) | every token |
+| 11 Fundamentals | `fu_`, `a_web_*` | website, RDAP domain record, GitHub, CoinGecko, DefiLlama | deep look, scored only when the token claims a product |
 
-Not captured: X account quality, mention velocity, community activity (need paid social data); narrative fit and meme
-quality (judgement); group 11 fundamentals (team, product, audit - manual). They are absent, not guessed.
+### What used to need paid data, and how it is measured for free
+
+| Spec factor | Paid source it would need | What is measured instead |
+|---|---|---|
+| Mention velocity | X API / social-listening feed | Growth per hour of GMGN's Telegram call count, call-out count, page visits and X followers between this program's own sightings (`a_tg_calls_per_h`, `a_callouts_per_h`, `a_visits_per_h`, `a_x_followers_per_h`) |
+| Community activity | Telegram / Discord bot access | The group's public t.me page: members and how many are online now (`a_tg_members`, `a_tg_online_pct`); a broadcast-only channel is told apart from a group |
+| X account quality | X API (about $200 a month) | From GMGN: followers, following and their ratio, renames, tokens the account promoted, deleted token posts, whether the "account" is just one post, X community (`a_x_*`, `d_x_*`). **Not measured: account age, engagement per post, bot replies** |
+| Narrative fit | a judge | The theme read from name, ticker, description and CoinGecko categories (`narrative`: ai, dog, cat, political ...), and whether that theme is trading *now*: share of the watched volume flowing through other tokens that share a word with it, and how many recent winners did (`m_meta_heat`, `m_meta_winners_n`) |
+| Meme quality | a judge | Shape only: ticker and name length, plain ticker, has an image, image and socials not copied (`a_symbol_len`, `a_name_words`, `a_has_logo`, `a_image_dup_n`). It cannot tell a good meme from a bad one |
+| Original vs copycat | - | GMGN's `og` flag, plus this program's own count of tokens with the same ticker and whether this one is the oldest (`a_symbol_twins_n`, `a_symbol_oldest`) |
+| Chain rotation, launchpad health | - | Own records: each chain's share of watched volume, and how often recent snapshots per chain / launchpad got a fast hit (`m_chain_vol_share`, `m_chain_fast_rate_3d`, `m_pad_fast_rate_7d`) |
+| Product | manual check | Site live, on its own domain, how much text is on it, mentions of docs / app / audit, and the domain's age from the registry (`a_web_*`, `fu_web_*`). A site built entirely in JavaScript shows little text |
+| Code activity | - | GitHub repository linked from the site or CoinGecko: last push, stars, age, fork or original (`fu_gh_*`) |
+| On-chain usage, audit | - | DefiLlama: TVL and audits on record for the token (`fu_tvl_usd`, `fu_audits_n`); rare at this size |
+| Listing catalysts | - | Listed on CoinGecko, its watchlist size (`fu_cg_listed`, `fu_cg_watchlist`) |
+
+Still not captured, and not guessed: a doxxed team, partnerships confirmed by the partner, unlock calendars beyond the
+lock ratio, and the three X items above. Every address fetched from a token's links is creator-written: only public
+hosts are fetched, with size caps, and private or internal addresses are refused.
 
 **Gates** (`gates:` in config.yaml, `gemhunter/scoring.py`): honeypot, tax over 10%, mint / freeze authority, unverified
 or owner-controlled EVM contracts, owner powers, liquidity not burned or locked, rug ratio over 0.30, wash trading,
@@ -67,21 +90,35 @@ top 10 over 40%, bundlers / insiders / entrapment over 30%, dev team over 10%, c
 under 150 holders, almost no trading, serial deployer, a deployer whose earlier call ended on a safety exit.
 
 **Scorecard** until a model has passed its tests, weighted in the spec's priority order: manipulation and distribution
-30, smart money 20, order flow 18, cost basis 12, price structure 10, attention 7, liquidity 3. A group with no data
-scores neutral.
+30, smart money 20, order flow 18, cost basis 12, price structure 10, attention 7, liquidity 3, fundamentals 3. A group
+with no data scores neutral.
 
 ## 4. How it improves itself
 
-1. **Grades.** Every snapshot is followed for 7 days: a hit = 3x before -50% (`label:`).
-2. **Daily retrain** (`learn.auto_retrain`, `AUTO_RETRAIN`) once there are 800 graded snapshots and 40 winners. History is
-   split by time: fit on the oldest 70%, test on the newest 15% it never saw. The new model replaces what is in use
-   only if it clearly beats the scorecard, beats luck, and is no worse than the current model.
-3. **Readable output.** Dashboard tab "What it has learned": for every factor, the hit rate in each value range - what
+Three stages, each taking over only when it has earned it. Calls go out from the first.
+
+| Stage | Decides calls | Starts | Learns from |
+|---|---|---|---|
+| 1 | Scorecard, weights from the spec | day one | - |
+| 2 | **Tuned scorecard** | as soon as 5 winners are graded (hours) | fast grades, every 3 hours |
+| 3 | Learned model | once it beats the tuned scorecard on unseen data (500 full grades and 25 winners at least) | full grades, every 12 hours |
+
+1. **Grades.** Every snapshot gets a fast grade (1.5x before -30% within 24 hours, `label.fast`) and a full one (3x before
+   -50% within 7 days, `label`). Fast grades arrive within hours and are what makes learning possible on day one.
+2. **Scorecard tuning** (`learn.tune`, `gemhunter/tuning.py`). Every 3 hours each scorecard item is checked: does its mark
+   rank winners above the rest? An item that does gains weight inside its group, one that points the wrong way loses
+   it, groups are re-weighted the same way. The step is deliberately small while winners are few (with 5 winners a
+   weight moves about a seventh of the way it would with hundreds), nothing is inverted or dropped, and the gates are
+   never touched. The dashboard lists every item's separation and multiplier.
+3. **Model retrain** (`learn.auto_retrain`, `AUTO_RETRAIN`) every 12 hours once there are 500 full grades and 25 winners.
+   History is split by time: fit on the oldest 70%, test on the newest 15% it never saw. The new model replaces what
+   is in use only if it clearly beats the scorecard, beats luck, and is no worse than the current model.
+4. **Readable output.** Dashboard tab "What it has learned": for every factor, the hit rate in each value range - what
    matters, without trusting a model. Tab "Scoreboard": whether higher scores really hit more, and whether each gate
    removes losers.
-4. **Own proven wallets.** The earliest real buyers of every deep-looked token are recorded; when the token is graded
+5. **Own proven wallets.** The earliest real buyers of every deep-looked token are recorded; when the token is graded
    they are credited. Wallets early in winners far more often than average become "proven" and count as a factor.
-5. **Own deployer record.** How each deployer's tokens ended here; a safety exit blocks that deployer for good.
+6. **Own deployer record.** How each deployer's tokens ended here; a safety exit blocks that deployer for good.
 
 ### Past data on this PC (same pattern as Launch Radar)
 
@@ -114,8 +151,8 @@ up on newer data than they were picked on.
    |---|---|---|
    | `GMGN_API_KEY` | yes | the GMGN key |
    | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | for signals | the bot Launch Radar posts with works; several chats comma-separated |
-   | `DASHBOARD_PASSWORD` | yes | a long password of your choice (also in this PC's `.env` for the sync) |
-   | `GMGN_WEIGHT_PER_SEC`, `GMGN_BUDGET` | optional | the key's plan (5 / 20 / 50) and this program's share of it (default 0.2) |
+   | `DASHBOARD_PASSWORD` | yes | the value already in this PC's `.env` (generated there; the sync signs in with it) |
+   | `GMGN_WEIGHT_PER_SEC`, `GMGN_BUDGET`, `GMGN_SHARED_USE` | optional | the key's plan (5 / 20 / 50), this program's share of it (default 0.2), another program's share (default 0.8) |
    | `CALL_MIN_SCORE`, `CALLS_PER_DAY`, `MCAP_MIN_USD`, `MCAP_MAX_USD`, `AUTO_RETRAIN` | optional | see `docker-compose.yaml` |
    | `TELEGRAM_THREAD_ID`, `TELEGRAM_SILENT_UPDATES`, `TELEGRAM_DAILY_SUMMARY_UTC` | optional | |
 
@@ -156,16 +193,18 @@ Without Telegram settings, messages are printed to the console.
 
 ## 8. Known limits
 
-- **The GMGN key is shared with Launch Radar and has no spare room.** GMGN's own header showed 0-2 units left in the
-  bucket (of 5) after almost every request, and 6 of 40 requests in the test run met a ban. A ban stops *both* programs,
-  and each request either one sends during it adds 5 seconds. Gem Hunter therefore waits for the bucket to refill
-  before every request, stays away at least 2 minutes after a ban, spaces its sweeps widely and does at most one deep
-  look per cycle. It works, slowly. Holder and trader lists cost the whole free bucket (weight 5) and are often refused;
-  a deep look then goes on without them and those factors score neutral (`deep_holders` / `deep_traders` record which).
+- **The GMGN key is shared with Launch Radar and is saturated.** Measured on 2026-11-11: the key was already banned
+  before Gem Hunter had sent a single request (45 minutes after its last one), GMGN's header showed 0-2 units left of 5
+  after almost every request, and in four 8-minute runs 9-15% of requests were refused. A ban stops *both* programs.
+  What Gem Hunter does about it: waits for the bucket to refill before every request; stays away 1-4 minutes after a
+  ban; never waits on GMGN for a single token (a deep look during a ban goes on with the list figures, free candles,
+  GoPlus and the community sources, and records what was missing in `deep_page` / `deep_holders` / `deep_traders`);
+  takes candles from GeckoTerminal instead. The result: it runs and calls, but sweeps are slow and incomplete (one run
+  reached only Solana, Base, BSC and Robinhood) and holder / trader lists (weight 5, the whole free bucket) rarely answer.
   **A separate GMGN key for Gem Hunter, or a Plus plan, removes this** - then set `GMGN_BUDGET=0.7` (own key) or
-  `GMGN_WEIGHT_PER_SEC=20` and, in `config.yaml`, `sources.gmgn.shared_use: 0`.
-- **Day one = scorecard only.** Its weights follow the spec's priority order and were scaled on one hour of live data,
-  not on outcomes. A first model needs 800 graded snapshots and 40 winners: a week or more.
+  `GMGN_WEIGHT_PER_SEC=20`, and `GMGN_SHARED_USE=0`.
+- **The first hours run on the spec's weights**, scaled on one hour of live data, not on outcomes. Tuning starts with
+  5 graded winners and moves in small steps; a learned model needs days.
 - **Tokens are followed by price polls** (20 s for open calls, 60 s for the rest), not trade by trade: a very brief
   spike or dip can be missed.
 - **Base's graduated list is mostly Zora content coins** (a dozen holders each); the holder and trading gates remove them.
@@ -181,15 +220,18 @@ gemhunter/engine.py        the loop: discovery, snapshots, deep looks, calls, tr
 gemhunter/factors.py       every factor
 gemhunter/scoring.py       gates + scorecard
 gemhunter/trade.py         grading a snapshot; a call's trade plan (updates, stops, safety exits)
+gemhunter/tuning.py        the scorecard re-weighting itself from fast grades
 gemhunter/model.py         learner: time-split test, promotion, threshold, lift tables
+gemhunter/narrative.py     theme, theme heat, meme shape, original or copy
 gemhunter/wallets.py       own proven wallets and deployer records
 gemhunter/notify.py        Telegram: entry, updates, warnings, exit, daily summary
-gemhunter/sources/         GMGN, DexScreener, GoPlus, CoinGecko
+gemhunter/sources/         GMGN, DexScreener, GeckoTerminal, GoPlus, CoinGecko, social.py (Telegram, website, RDAP,
+                           GitHub, CoinGecko listing, DefiLlama)
 gemhunter/web/             dashboard
 gemhunter/export.py        daily research files served at /api/research
 tools/sync_research.py     PC: daily copy of the research files + traits report
 tools/analyze.py           PC: what the runners had in common
 tools/retrain.py           PC: ask the VPS for a retrain
 tools/probe_gmgn.py        PC: check GMGN routes and fields with your key
-tests/                     21 tests
+tests/                     31 tests
 ```

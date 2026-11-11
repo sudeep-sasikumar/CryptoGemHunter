@@ -63,7 +63,7 @@ class Gmgn:
         self._lock = asyncio.Lock()
         self.banned_until = 0.0
         self.heavy_until = 0.0
-        self.calls = self.errors = self.limited = self.spent = self.strikes = 0
+        self.calls = self.errors = self.limited = self.spent = self.strikes = self.skipped = 0
         self.remaining: float | None = None
         self.remaining_ts = 0.0
         self.shared_use = float(cfg.get("shared_use") or 0.0)      # share of the plan another program spends
@@ -83,12 +83,14 @@ class Gmgn:
     def heavy_ok(self) -> bool:
         return self.enabled and time.time() >= self.heavy_until
 
-    async def _wait(self, weight: int, quiet: float = 0.0) -> None:
+    async def _wait(self, weight: int, quiet: float = 0.0, patient: bool = True) -> bool:
         """Take the next slot in the pacing queue. `quiet` seconds without any request of ours come first: a
         weight-5 list needs GMGN's whole free bucket (capacity 5), which only refills while we stay silent."""
         while True:
             ban = self.banned_until - time.time()
             if ban > 0:
+                if not patient:
+                    return False                           # a look at one token goes on without GMGN rather than wait
                 await asyncio.sleep(ban + 0.1)
                 continue
             async with self._lock:
@@ -107,16 +109,18 @@ class Gmgn:
                 if est < need:
                     await asyncio.sleep(min((need - est) / refill, 20.0))
             if time.time() >= self.banned_until:
-                return
+                return True
 
-    async def _call(self, method: str, path: str, query: dict | None = None, body: dict | None = None):
+    async def _call(self, method: str, path: str, query: dict | None = None, body: dict | None = None, patient: bool = True):
         chain = (query or {}).get("chain") or (body or {}).get("chain") or ""
         if not self.enabled or (path, chain) in self.unsupported:
             return None
         if path in HEAVY and not self.heavy_ok():
             return None
         weight = WEIGHT.get(path, 2)
-        await self._wait(weight, float(self.cfg.get("heavy_quiet_s") or 0) if path in HEAVY else 0.0)
+        if not await self._wait(weight, float(self.cfg.get("heavy_quiet_s") or 0) if path in HEAVY else 0.0, patient):
+            self.skipped += 1
+            return None
         q = dict(query or {}, timestamp=int(time.time()), client_id=str(uuid.uuid4()))
         self.calls += 1
         self.spent += weight
@@ -144,7 +148,7 @@ class Gmgn:
             # reset, longer after every limit in a row (the key is shared: a ban here also stops Launch Radar).
             # Measured 2026-11-11 with Launch Radar on the same key: a ban outlasts its stated reset, because every
             # request either program sends meanwhile adds 5 s. So this program stays away for minutes, not seconds.
-            base = max(reset - time.time() if reset else 0.0, float(self.cfg.get("ban_pause_s") or 120) if banned else 5.0)
+            base = max(reset - time.time() if reset else 0.0, float(self.cfg.get("ban_pause_s") or 45) if banned else 5.0)
             pause = min(base + (15.0 if banned else 5.0), 300.0) * min(2 ** (self.strikes - 1), 4)
             until = time.time() + min(pause, 600.0)
             if path in HEAVY:
@@ -208,35 +212,36 @@ class Gmgn:
 
     # ---------------------------------------------------------------- per token
     async def info(self, chain: str, address: str) -> dict | None:
-        d = await self._call("GET", "/v1/token/info", {"chain": chain, "address": address})
+        d = await self._call("GET", "/v1/token/info", {"chain": chain, "address": address}, patient=False)
         return d if isinstance(d, dict) and d.get("symbol") else None
 
     async def security(self, chain: str, address: str) -> dict | None:
-        d = await self._call("GET", "/v1/token/security", {"chain": chain, "address": address})
+        d = await self._call("GET", "/v1/token/security", {"chain": chain, "address": address}, patient=False)
         return d if isinstance(d, dict) and d else None
 
     async def holders(self, chain: str, address: str, limit: int = 100) -> list[dict] | None:
         d = await self._call("GET", "/v1/market/token_top_holders",
                              {"chain": chain, "address": address, "limit": limit, "order_by": "amount_percentage",
-                              "direction": "desc"})
+                              "direction": "desc"}, patient=False)
         return None if d is None else rows(d)
 
     async def traders(self, chain: str, address: str, limit: int = 100) -> list[dict] | None:
         d = await self._call("GET", "/v1/market/token_top_traders",
                              {"chain": chain, "address": address, "limit": limit, "order_by": "buy_volume_cur",
-                              "direction": "desc"})
+                              "direction": "desc"}, patient=False)
         return None if d is None else rows(d)
 
     async def kline(self, chain: str, address: str, resolution: str, days: float) -> list[dict] | None:
         now = time.time()
         d = await self._call("GET", "/v1/market/token_kline",
                              {"chain": chain, "address": address, "resolution": resolution,
-                              "from": int((now - days * 86400) * 1000), "to": int(now * 1000)})   # milliseconds
+                              "from": int((now - days * 86400) * 1000), "to": int(now * 1000)}, patient=False)   # ms
         return None if d is None else rows(d)
 
     async def created_tokens(self, chain: str, wallet: str) -> dict | None:
         d = await self._call("GET", "/v1/user/created_tokens",
-                             {"chain": chain, "wallet_address": wallet, "order_by": "token_ath_mc", "direction": "desc"})
+                             {"chain": chain, "wallet_address": wallet, "order_by": "token_ath_mc", "direction": "desc"},
+                             patient=False)
         return d if isinstance(d, dict) else None
 
     async def wallet_stats(self, chain: str, wallets: list[str], period: str = "30d") -> list[dict]:

@@ -226,3 +226,97 @@ async def test_learner_trains_tests_and_promotes(tmp_path):
     assert eng.call_block(tok, 50, 0.9, time.time()) is None and "chance" in eng.call_block(tok, 99, 0.01, time.time())
     assert train(eng.db.path, dict(eng.cfg.learn), dict(eng.cfg.call), tmp_path / "m2", None)["n_rows"] == 1500
     eng.db.close()
+
+
+async def test_scorecard_tunes_itself_from_fast_grades(tmp_path):
+    """Snapshots where few bundlers really marks the winners: the tuner must raise that item, leave noise alone,
+    and the engine must score with the new weights."""
+    eng = make_engine(tmp_path)
+    rng, t0 = random.Random(5), time.time() - 2 * 86400
+    for i in range(400):
+        bundler = rng.uniform(0, 30)
+        fast = int(rng.random() < (0.45 if bundler < 6 else 0.03))
+        kid, vals = eng.db.pack({"chain": "sol", "stage": "scan", "h_bundler_pct": bundler, "h_insider_pct": rng.uniform(0, 30)})
+        eng.db.execute("INSERT INTO snapshots(token_id, ts, stage, price, entry_price, mcap, fkeys, features, score, fast_hit) "
+                       "VALUES(?,?,?,?,?,?,?,?,?,?)", (f"sol:t{i}", t0 + i * 300, "scan", 1, 1.03, 3e5, kid, vals, 60, fast))
+    eng.db.commit()
+    t = await eng.retune()
+    assert t["pos"] >= 30 and "tuned on" in t["note"]
+    assert t["items"]["few bundlers"]["auc"] > 0.75 and t["items"]["few bundlers"]["mult"] > 1.3
+    assert 0.75 < t["items"]["few insiders"]["mult"] < 1.25                     # noise stays near 1
+    assert t["items"]["smart holders bought"]["mult"] == 1.0                    # never measured: untouched
+    assert eng.tuning is t and eng.db.get("tuning")["items"]["few bundlers"]["mult"] > 1.3
+    f = {"chain": "sol", "h_bundler_pct": 28.0, "h_insider_pct": 1.0}
+    eng.tuning = {}
+    before = eng.judge(f)[1]
+    eng.tuning = t
+    assert eng.judge(f)[1] < before                                             # heavy bundling now costs more
+    eng.db.close()
+
+
+async def test_tuning_waits_for_winners(tmp_path):
+    eng = make_engine(tmp_path)
+    kid, vals = eng.db.pack({"chain": "sol", "h_bundler_pct": 3.0})
+    for i in range(80):
+        eng.db.execute("INSERT INTO snapshots(token_id, ts, stage, fkeys, features, score, fast_hit) VALUES(?,?,?,?,?,?,?)",
+                       (f"sol:t{i}", time.time() - i * 60, "scan", kid, vals, 60, int(i < 3)))
+    eng.db.commit()
+    t = await eng.retune()
+    assert "collecting: 3/5 winners" in t["note"] and not eng.tuning and eng.db.get("tuning_last")["pos"] == 3
+    eng.db.close()
+
+
+async def test_deep_look_adds_community_theme_and_original(tmp_path):
+    eng = make_engine(tmp_path)
+    eng.gmgn.rank_items = {"sol": [rank_item(symbol="AGENT", name="AI Agent Cat"),
+                                   rank_item("Copy3333333333333333333333333333333333333333", symbol="agent", name="ai agent kitty",
+                                             creation_timestamp=time.time() - 3600)]}
+    now = time.time()
+    for i in eng.gmgn.rank_items["sol"]:
+        tok = eng.touch("sol", i["address"], F.from_rank(i, "1h"), now)
+        tok.symbol, tok.name = i["symbol"], i["name"]
+    eng.flush(now)
+    first, copy = list(eng.toks.values())
+    eng.meta.rebuild((t.id, eng_words(t), 9000) for t in eng.toks.values())
+    f1, f2 = eng.factors(first, now), eng.factors(copy, now)
+    assert f1["narrative"] == "ai" and f1["a_symbol_twins_n"] == 1 and f1["a_symbol_oldest"] == 1 and f2["a_symbol_oldest"] == 0
+    assert f1["m_meta_heat"] == 1.0 and f1["m_meta_peers_n"] == 1 and f1["a_symbol_len"] == 5
+    eng.gmgn.info_over = {"symbol": "AGENT", "name": "AI Agent Cat"}
+    await eng.deep_look(first)
+    f = eng.db.unpack(*eng.db.one("SELECT fkeys, features FROM snapshots WHERE stage='deep'"))
+    assert f["a_tg_members"] == 2400 and f["a_web_domain_age_d"] == 40 and f["fu_claims_product"] == 1 and f["narrative"] == "ai"
+    text = eng.telegram.messages[0][1]
+    assert "Telegram 2,400 (120 online)" in text and "theme: ai" in text and "original ticker" in text and "own site" in text
+    eng.db.close()
+
+
+def eng_words(tok):
+    from gemhunter import narrative as N
+    return N.words(tok.symbol, tok.name)
+
+
+async def test_deep_look_completes_while_gmgn_is_banned(tmp_path):
+    """GMGN answers nothing for the token (a ban): the look goes on with the list figures, free candles and the
+    community sources, records which parts were missing, and the list's own contract check still allows a call."""
+    from .helpers import candles
+    eng = make_engine(tmp_path)
+
+    async def nothing(*a, **k):
+        return None
+    for name in ("info", "security", "kline", "holders", "traders", "created_tokens"):
+        setattr(eng.gmgn, name, nothing)
+
+    async def free_candles(chain, pool, hours=168):
+        return candles()
+    eng.gecko.candles = free_candles
+    tok = await discover(eng)
+    eng.evaluate(tok, time.time())
+    await eng.deep_look(tok)
+    f = eng.db.unpack(*eng.db.one("SELECT fkeys, features FROM snapshots WHERE stage='deep'"))
+    assert f["deep_page"] == 0 and f["deep_holders"] == 0 and f["deep_candles"] == 1 and f["p_candles_n"] == 60
+    assert f["s_list_check"] == 1 and "s_checked" not in f and f["a_tg_members"] == 2400
+    snap = eng.db.one("SELECT gate, score FROM snapshots WHERE stage='deep'")
+    assert snap["gate"] is None and snap["score"] > 60                   # not gated; scored on what was available
+    # less evidence, lower score: it is called only if it still clears the bar every call must clear
+    assert eng.db.one("SELECT COUNT(*) n FROM calls")["n"] == int(snap["score"] >= eng.call_threshold(time.time()))
+    eng.db.close()

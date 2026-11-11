@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
   score REAL, prob REAL, model_ver TEXT, gate TEXT, called INTEGER DEFAULT 0,
   done INTEGER DEFAULT 0, hit INTEGER DEFAULT 0, stopped INTEGER DEFAULT 0,
   peak_mult REAL DEFAULT 1, min_mult REAL DEFAULT 1, end_mult REAL, peak_mcap REAL,
-  t_hit REAL, t_stop REAL, t_peak REAL, end_reason TEXT, done_ts REAL, last_ts REAL
+  t_hit REAL, t_stop REAL, t_peak REAL, end_reason TEXT, done_ts REAL, last_ts REAL,
+  fast_hit INTEGER, t_fast REAL                 -- the fast grade (label.fast), known within hours
 );
 CREATE INDEX IF NOT EXISTS ix_snap_token ON snapshots(token_id);
 CREATE INDEX IF NOT EXISTS ix_snap_done ON snapshots(done, ts);
@@ -101,6 +102,11 @@ class DB:
         self.con.execute("PRAGMA synchronous=NORMAL")
         self.con.execute("PRAGMA busy_timeout=5000")
         self.con.executescript(SCHEMA)
+        have = {r["name"] for r in self.con.execute("PRAGMA table_info(snapshots)")}
+        for name, kind in (("fast_hit", "INTEGER"), ("t_fast", "REAL")):
+            if name not in have:
+                self.con.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {kind}")
+        self.con.execute("CREATE INDEX IF NOT EXISTS ix_tokens_symbol ON tokens(symbol COLLATE NOCASE)")
         self._in_tx = False
         self._layouts: dict[tuple, int] = {}
         self._keys: dict[int, tuple] = {}

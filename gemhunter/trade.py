@@ -26,6 +26,8 @@ class Follow:
     done: bool = False
     reason: str | None = None
     dirty: bool = False
+    fast: int | None = None       # the fast grade: 1 hit, 0 not, None still open
+    t_fast: float | None = None
 
     def tick(self, price: float | None, liq: float | None, ts: float, cfg) -> bool:
         """Feed one price. Returns True when the label is final."""
@@ -45,6 +47,13 @@ class Follow:
                     self.stopped, self.t_stop = True, age
             elif self.hit and m <= cfg.stop_mult and self.t_stop is None:
                 self.t_stop = age                          # fell back after the hit: recorded, still a hit
+            if self.fast is None:
+                if m >= cfg.fast.target_mult:
+                    self.fast, self.t_fast = 1, age
+                elif m <= cfg.fast.stop_mult:
+                    self.fast, self.t_fast = 0, age
+        if self.fast is None and age >= cfg.fast.horizon_h * 3600:
+            self.fast, self.t_fast, self.dirty = 0, age, True
         if liq is not None and liq < cfg.dead_liq_usd:
             return self.finish("liquidity gone", ts)
         if self.stopped:
@@ -56,6 +65,8 @@ class Follow:
     def finish(self, reason: str, ts: float) -> bool:
         if not self.done:
             self.done, self.reason, self.dirty = True, reason, True
+            if self.fast is None:
+                self.fast, self.t_fast = 0, ts - self.ts
             if reason == "liquidity gone" and not self.hit:
                 self.stopped = True
                 self.t_stop = self.t_stop if self.t_stop is not None else ts - self.ts

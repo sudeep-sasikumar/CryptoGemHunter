@@ -169,7 +169,7 @@ function spark(bars, entry, events) {
     `<circle cx="${X(e.ts).toFixed(1)}" cy="${Y(e.price || entry).toFixed(1)}" r="4" fill="${e.kind==="exit"?"#f0655a":e.kind==="warning"?"#d9a13b":"#3fb950"}"><title>${esc(e.label)}</title></circle>`).join("");
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="0" x2="${W}" y1="${Y(entry)}" y2="${Y(entry)}" stroke="#8b96a8" stroke-dasharray="4 4" stroke-width="1"/><path d="${path}" fill="none" stroke="#58a6ff" stroke-width="1.6"/>${marks}</svg>`;
 }
-const FGROUPS = [["s_","Contract safety"],["l_","Liquidity"],["d_","Deployer"],["h_","Holders and manipulation"],["c_","Cost basis and retention"],["w_","Smart money and wallets"],["f_","Order flow"],["p_","Price and lifecycle"],["a_","Attention"],["m","Market context"],["own_","Own history"],["gp_","GoPlus contract read"]];
+const FGROUPS = [["s_","Contract safety"],["l_","Liquidity"],["d_","Deployer"],["h_","Holders and manipulation"],["c_","Cost basis and retention"],["w_","Smart money and wallets"],["f_","Order flow"],["p_","Price and lifecycle"],["a_","Attention"],["m","Market context"],["own_","Own history"],["fu_","Fundamentals"],["gp_","GoPlus contract read"]];
 function factorPanel(f) {
   const keys = Object.keys(f || {}).sort();
   return FGROUPS.map(([pre, title]) => {
@@ -257,8 +257,8 @@ async function score() {
       s.by_day.map(r => `<tr><td>${esc(r.day)}</td><td class="num">${r.n}</td><td class="num">${r.closed||0}</td><td class="num">${r.wins||0}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.best_peak)}</td></tr>`))}
     <h2>Does the score mean anything? (every graded snapshot, called or not)</h2>
     <p class="note">Share of snapshots that reached ${tg}x before −50% within 7 days, by scorecard range. If higher scores do not hit more often, the scorecard is not working and the weights need changing.</p>
-    ${table([["Stage"],["Score"],["Snapshots","num"],[`Hit ${tg}x`,"num"],["Average peak","num"],[""]],
-      s.score_buckets.map(r => `<tr><td>${esc(r.stage)}</td><td>${r.bucket}–${r.bucket+10}</td><td class="num">${r.n}</td><td class="num">${pct(r.rate,1)}</td><td class="num">${mult(r.avg_peak)}</td><td><span class="bar" style="width:${Math.round((r.rate||0)*400)}px"></span></td></tr>`))}
+    ${table([["Stage"],["Score"],["Snapshots","num"],["Fast hit (within a day)","num"],[`Hit ${tg}x (7 days)`,"num"],["Average peak","num"],[""]],
+      s.score_buckets.map(r => `<tr><td>${esc(r.stage)}</td><td>${r.bucket}–${r.bucket+10}</td><td class="num">${r.n}</td><td class="num">${pct(r.fast_rate,1)}</td><td class="num">${pct(r.rate,1)}</td><td class="num">${mult(r.avg_peak)}</td><td><span class="bar" style="width:${Math.round((r.fast_rate||0)*300)}px"></span></td></tr>`))}
     <h2>Base rates</h2>
     ${table([["Chain"],["Stage"],["Graded snapshots","num"],[`Hit ${tg}x`,"num"],["Average peak","num"]],
       s.base_rates.map(r => `<tr><td>${esc(CH[r.chain]||r.chain)}</td><td>${esc(r.stage)}</td><td class="num">${r.n}</td><td class="num">${pct(r.rate,1)}</td><td class="num">${mult(r.avg_peak)}</td></tr>`))}
@@ -268,18 +268,23 @@ async function score() {
 
 // ------------------------------------------------------------------ learning
 async function learn() {
-  const L = await api("learning"), g = L.graded || {}, last = L.last || {};
+  const L = await api("learning"), g = L.graded || {}, last = L.last || {}, T = L.tuning || {}, tl = L.tuning_last || {};
   const base = (L.lift[0] || {}).base_rate;
   $("#main").innerHTML = `
     <div class="cards">
-      <div class="card"><span>Graded snapshots</span><b>${g.n || 0}</b><span>needs ${L.need.rows} for a first model</span></div>
-      <div class="card"><span>Winners among them</span><b>${g.hit || 0}</b><span>needs ${L.need.pos}</span></div>
-      <div class="card"><span>Deciding calls</span><b style="font-size:15px">${L.models.find(m => m.active) ? esc(L.models.find(m => m.active).ver) : "scorecard"}</b></div>
+      <div class="card"><span>Fast grades (${L.fast.target_mult}x before −${Math.round((1-L.fast.stop_mult)*100)}%, ${L.fast.horizon_h} h)</span><b>${g.fast_n || 0}</b><span>${g.fast_hit || 0} winners · tuning starts at ${L.tune_cfg.min_winners}</span></div>
+      <div class="card"><span>Full grades (7 days)</span><b>${g.n || 0}</b><span>${g.hit || 0} winners · a model needs ${L.need.rows} / ${L.need.pos}</span></div>
+      <div class="card"><span>Deciding calls</span><b style="font-size:15px">${L.models.find(m => m.active) ? esc(L.models.find(m => m.active).ver) : T.items ? "tuned scorecard" : "scorecard"}</b></div>
       <div class="card"><span>Automatic retraining</span><b>${L.auto_retrain ? "on" : "off"}</b></div>
       <div class="card"><span>Wallets tracked</span><b>${L.wallets.tracked}</b><span>${L.wallets.proven.length} proven</span></div>
     </div>
     <p class="note">Last retrain: ${last.ts ? when(last.ts) : "never"} — ${esc(last.note || last.verdict || "–")}. A new model replaces what is in use only if, on the newest data it has never seen, it clearly beats the scorecard, beats luck, and is no worse than the current model.</p>
     <div class="filters"><button onclick="retrain(false)">Train a candidate and compare (changes nothing)</button><button onclick="retrain(true)">Train and switch if it passes</button><span id="rt" class="dim"></span></div>
+    <h2>Scorecard tuning (re-weighted every ${L.tune_cfg.every_h} h from the fast grades)</h2>
+    <p class="note">${tl.ts ? "Last look " + when(tl.ts) + ": " + esc(tl.note || "") : "Not run yet."} Separation 50% = no better than chance; above = the item's mark ranks winners higher. A multiplier above 1 means the item gained weight inside its group; the doubt built in keeps early changes small.</p>
+    ${T.groups ? `<div class="cells" style="margin-bottom:8px">${Object.entries(T.groups).map(([k, v]) => `<span class="cell" style="background:hsl(${Math.round(Math.min(1, Math.max(0, (v.mult - 0.6))) * 120)},55%,55%)" title="separation ${v.auc == null ? "–" : Math.round(v.auc*100) + "%"}">${esc(k)} ${L.weights[k]} × ${v.mult}</span>`).join("")}</div>` : ""}
+    ${table([["Scorecard item"],["Group"],["Graded","num"],["Winners","num"],["Separation","num"],["Weight ×","num"]],
+      Object.entries(T.items || {}).sort((a, b) => (b[1].mult - a[1].mult)).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="dim">${esc(v.group)}</td><td class="num">${v.n}</td><td class="num">${v.pos}</td><td class="num">${v.auc == null ? "–" : Math.round(v.auc*100) + "%"}</td><td class="num ${v.mult > 1.05 ? "good" : v.mult < 0.95 ? "bad" : ""}">${v.mult}</td></tr>`))}
     <h2>What separates winners (hit rate per value range of each factor; base rate ${pct(base,1)})</h2>
     ${table([["Factor"],["Coverage","num"],["Value ranges → hit rate"]],
       L.lift.slice(1, 50).map(r => `<tr><td>${esc(r.feature)}</td><td class="num">${pct(r.coverage)}</td><td><div class="cells">${r.cells.map(c =>
@@ -321,6 +326,7 @@ async function health() {
       <div><span>Budget</span><span>${num(g.budget_per_s,2)} weight / s</span></div>
       <div><span>Requests</span><span>${g.calls}</span></div><div><span>Weight spent</span><span>${g.weight_spent}</span></div>
       <div><span>Errors</span><span>${g.errors}</span></div><div><span>Rate-limited</span><span class="${g.limited ? "warn" : ""}">${g.limited}</span></div>
+      <div><span>Skipped during a ban</span><span>${g.skipped_in_ban}</span></div>
       <div><span>Bucket left (GMGN)</span><span>${g.remaining ?? "–"}</span></div><div><span>Queue</span><span>${g.backlog_s} s</span></div>
       <div><span>Holder / trader lists paused</span><span>${g.heavy_paused_s ? g.heavy_paused_s + " s" : "no"}</span></div>
       <div><span>Last limit</span><span>${g.last_limit ? esc(g.last_limit.code) + " on " + esc(g.last_limit.path) + ", " + ago(g.last_limit.ts) + " ago" : "none"}</span></div>

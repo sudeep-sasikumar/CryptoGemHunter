@@ -174,8 +174,9 @@ def build_app(engine) -> FastAPI:
         base = db.query("SELECT t.chain, s.stage, COUNT(*) n, AVG(s.hit) rate, AVG(s.peak_mult) avg_peak FROM snapshots s "
                         "LEFT JOIN tokens t ON t.id=s.token_id WHERE s.done=1 AND s.ts>? GROUP BY t.chain, s.stage "
                         "ORDER BY t.chain, s.stage", (since,))
-        buckets = db.query("SELECT stage, CAST(score/10 AS INT)*10 bucket, COUNT(*) n, AVG(hit) rate, AVG(peak_mult) avg_peak "
-                           "FROM snapshots WHERE done=1 AND ts>? GROUP BY stage, bucket ORDER BY stage, bucket", (since,))
+        buckets = db.query("SELECT stage, CAST(score/10 AS INT)*10 bucket, COUNT(*) n, AVG(CASE WHEN done THEN hit END) rate, "
+                           "AVG(fast_hit) fast_rate, AVG(peak_mult) avg_peak FROM snapshots WHERE (done=1 OR fast_hit IS NOT NULL) "
+                           "AND ts>? GROUP BY stage, bucket ORDER BY stage, bucket", (since,))
         gated = db.query("SELECT (gate IS NOT NULL) gated, COUNT(*) n, AVG(hit) rate FROM snapshots WHERE done=1 AND ts>? "
                          "GROUP BY gated", (since,))
         return {"total": dict(total), "by_chain": [dict(r) for r in by_chain], "by_day": [dict(r) for r in by_day],
@@ -190,11 +191,14 @@ def build_app(engine) -> FastAPI:
             m = json.loads(x.pop("metrics") or "{}")
             x["test"], x["threshold"], x["importance"] = m.get("test"), m.get("threshold"), m.get("importance")
             models.append(x)
-        graded = db.one("SELECT COUNT(*) n, SUM(hit) hit FROM snapshots WHERE done=1")
+        graded = db.one("SELECT SUM(done) n, SUM(done AND hit) hit, SUM(fast_hit IS NOT NULL) fast_n, SUM(fast_hit) fast_hit "
+                        "FROM snapshots")
         w = db.one("SELECT COUNT(*) n, SUM(n_tok>=?) seasoned FROM wallets", (cfg.learn.wallets.min_tokens,))
         return {"models": models, "lift": db.get("lift") or [], "last": engine.last_train,
                 "graded": dict(graded), "need": {"rows": cfg.learn.min_rows, "pos": cfg.learn.min_pos},
                 "auto_retrain": bool(cfg.learn.auto_retrain),
+                "tuning": engine.tuning, "tuning_last": db.get("tuning_last"), "tune_cfg": dict(cfg.learn.tune),
+                "fast": dict(cfg.label.fast), "weights": dict(cfg.score.weights),
                 "wallets": {"tracked": w["n"], "seasoned": w["seasoned"] or 0, "base": engine.history.base,
                             "proven": engine.history.top(25)},
                 "deployers": [dict(r) for r in db.query(

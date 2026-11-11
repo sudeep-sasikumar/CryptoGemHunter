@@ -80,6 +80,9 @@ def _shared(i: dict) -> dict:
         "a_dex_paid": int(any(num(i.get(k)) for k in ("dexscr_ad", "dexscr_update_link", "dexscr_trending_bar"))),
         "a_dex_boost": num(i.get("dexscr_boost_fee")),
         "l_liq_usd": num(i.get("liquidity")),
+        # the list itself answers the contract questions: mint / freeze on Solana, honeypot or verification on EVM
+        "s_list_check": 1 if (i.get("renounced_mint") not in (None, "") and i.get("renounced_freeze_account") not in (None, ""))
+        or any(i.get(k) not in (None, "", "unknown") for k in ("is_honeypot", "is_open_source", "open_source")) else None,
         "_creator": str(i.get("creator") or "")[:80], "_launchpad": str(i.get("launchpad_platform") or "")[:40],
         "_exchange": str(i.get("exchange") or "")[:40],
         "_created": num(i.get("creation_timestamp")) or num(i.get("created_timestamp")),
@@ -110,6 +113,8 @@ def from_rank(i: dict, interval: str) -> dict:
         "a_has_web": int(bool(i.get("website"))),
         "_supply": num(i.get("total_supply")),
         "_x": str(i.get("twitter_username") or "")[:40],
+        "_tg": str(i.get("telegram") or "")[:120] or None, "_web": str(i.get("website") or "")[:200] or None,
+        "_logo": bool(i.get("logo")) if "logo" in i else None,
     })
     return f
 
@@ -139,6 +144,13 @@ def from_trench(i: dict) -> dict:
         "f_net_buy_24h": num(i.get("net_buy_24h")), "f_total_fee": num(i.get("total_fee")),
         "l_migrate_s": num(i.get("complete_cost_time")),
         "a_x_followers": num(i.get("x_user_follower")), "a_tg_calls": num(i.get("tg_call_count")),
+        "a_x_following": num(i.get("x_user_following")),
+        "a_x_follow_ratio": div(num(i.get("x_user_follower")), max(num(i.get("x_user_following")) or 0.0, 1.0))
+        if num(i.get("x_user_follower")) is not None else None,
+        "a_x_is_post": yn(i.get("twitter_is_tweet")),          # the "X account" is one post, not the coin's own account
+        "a_x_community": int(bool(i.get("twitter_community_id"))) if "twitter_community_id" in i else None,
+        "_tg": str(i.get("telegram") or "")[:120] or None, "_web": str(i.get("website") or "")[:200] or None,
+        "_logo": bool(i.get("logo")) if "logo" in i else None,
         "a_x_renamed_n": num(i.get("twitter_rename_count")),
         "a_social_dup_n": max((num(i.get(k)) or 0 for k in ("twitter_dup", "telegram_dup", "website_dup")), default=0)
         if any(k in i for k in ("twitter_dup", "telegram_dup", "website_dup")) else None,
@@ -217,7 +229,8 @@ def from_info(info: dict, address: str = "") -> dict:
         "h_bundler_wallets_n": num(tags.get("bundler_wallets")), "h_fresh_wallets_n": num(tags.get("fresh_wallets")),
         "h_whale_n": num(tags.get("whale_wallets")),
         "f_hot": num(price.get("hot_level")),
-        "_x": str(link.get("twitter_username") or "")[:40], "_web": str(link.get("website") or "")[:120],
+        "_x": str(link.get("twitter_username") or "")[:40], "_web": str(link.get("website") or "")[:200] or None,
+        "_tg": str(link.get("telegram") or "")[:120] or None, "_logo": bool(info.get("logo")) if "logo" in info else None,
     }
     for w in ("1m", "5m", "1h", "6h", "24h"):
         put(f, {f"g_vol_{w}": num(price.get(f"volume_{w}")), f"g_swaps_{w}": num(price.get(f"swaps_{w}")),
@@ -487,7 +500,7 @@ def from_history(obs: list) -> dict:
     """What changed while this program watched. obs: (ts, holders, top10 %, mcap), oldest first."""
     if len(obs) < 2:
         return {}
-    now_ts, holders, top10, _ = obs[-1]
+    now_ts, holders, top10 = obs[-1][0], obs[-1][1], obs[-1][2]
     f: dict = {"p_watched_h": (now_ts - obs[0][0]) / 3600}
 
     def back(hours: float):
@@ -503,6 +516,12 @@ def from_history(obs: list) -> dict:
     a, b = back(1), back(2)
     if a and b and a[1] and b[1] and holders and b[1] != a[1]:
         f["h_holder_accel"] = (holders - a[1]) / max(abs(a[1] - b[1]), 1.0)
+    # attention velocity: how fast Telegram calls, call-outs, page visits and X followers are growing per hour,
+    # measured between this program's own sightings (the "mention velocity" a paid feed would sell)
+    for i, name in ((4, "a_tg_calls_per_h"), (5, "a_callouts_per_h"), (6, "a_visits_per_h"), (7, "a_x_followers_per_h")):
+        seen = [(o[0], o[i]) for o in obs if len(o) > i and o[i] is not None and now_ts - o[0] <= 6 * 3600]
+        if len(seen) >= 2 and seen[-1][0] - seen[0][0] >= 600:
+            f[name] = (seen[-1][1] - seen[0][1]) / ((seen[-1][0] - seen[0][0]) / 3600)
     return f
 
 
@@ -563,4 +582,4 @@ def derive(f: dict, now: float | None = None) -> dict:
 def stored(f: dict) -> dict:
     """What goes into a snapshot: numbers and the few category labels, no working data."""
     return {k: v for k, v in f.items() if not k.startswith(("_", "g_")) and v is not None
-            and (isinstance(v, (int, float)) or k in ("chain", "launchpad", "stage"))}
+            and (isinstance(v, (int, float)) or k in ("chain", "launchpad", "stage", "narrative"))}

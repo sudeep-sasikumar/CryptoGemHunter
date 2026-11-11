@@ -39,7 +39,7 @@ sources:
       every_s: 300
       limit: 200
       chains: [sol, bsc, base, eth, robinhood]
-    ban_pause_s: 120         # stay away at least this long after a ban (a request during a ban lengthens it)
+    ban_pause_s: 45          # stay away at least this long after a ban (doubles for bans in a row, up to 4x)
     shared_use: 0.8          # share of the plan Launch Radar spends on the same key (0 when the key is this program's alone)
     heavy_quiet_s: 2         # extra silence before a holder / trader list (weight 5 = the whole free bucket)
     heavy_cooldown_s: 600    # after a refused one, leave them alone this long
@@ -50,8 +50,15 @@ sources:
     enabled: true
     calls_per_min: 20
     chain_ids: {eth: "1", bsc: "56", base: "8453", robinhood: "4663"}
+  gecko:                     # GeckoTerminal (free): hourly candles for the deep look, so GMGN's are not needed
+    enabled: true
+    calls_per_min: 25
+    networks: {sol: solana, eth: eth, base: base, bsc: bsc, robinhood: robinhood}
   market:                    # BTC / chain coin trend (CoinGecko, free)
     every_s: 900
+  social:                    # free public pages at the deep look: Telegram group, website + domain age, GitHub,
+    enabled: true            # CoinGecko listing and categories, DefiLlama usage (no keys, no GMGN budget)
+    defillama: true
 
 # ---------------------------------------------------------------- watching and snapshots
 watch:
@@ -68,6 +75,10 @@ label:                       # what happened next: the outcome every snapshot is
   horizon_h: 168             # ... within 7 days
   slippage_pct: 3            # the snapshot price is assumed this much worse than the last trade
   dead_liq_usd: 1500         # liquidity under this = gone
+  fast:                      # the fast grade, known within hours: what the scorecard tunes itself on from day one
+    target_mult: 1.5         # 1.5x ...
+    stop_mult: 0.7           # ... before -30% ...
+    horizon_h: 24            # ... within a day
 
 # ---------------------------------------------------------------- group 1: pass / fail
 gates:
@@ -98,6 +109,7 @@ score:
     structure: 10            # group 8
     attention: 7             # groups 9 + 10
     liquidity: 3             # group 2
+    fundamentals: 3          # group 11, only for tokens that claim a product
 
 deep:                        # the expensive look (holders, traders, candles, deployer history): top candidates only
   min_score: 58
@@ -140,9 +152,21 @@ trade:
 # ---------------------------------------------------------------- learning
 learn:
   auto_retrain: true         # AUTO_RETRAIN
-  retrain_hours: 24
-  min_rows: 800              # labelled snapshots needed before a model is tried
-  min_pos: 40                # ... and winners among them
+  retrain_hours: 12
+  min_rows: 500              # labelled snapshots needed before a model is tried
+  min_pos: 25                # ... and winners among them
+  tune:                      # the scorecard re-weights itself from the fast grades (gemhunter/tuning.py)
+    enabled: true
+    every_h: 3
+    min_winners: 5           # starts as soon as this many winners are graded
+    min_rows: 60
+    window_days: 14
+    strength: 2.0
+    prior_winners: 30        # doubt: with 5 winners a multiplier moves about a seventh of the way
+    item_min: 0.3
+    item_max: 2.5
+    group_min: 0.6
+    group_max: 1.6
   max_rows: 300000
   lift_bins: 5
   promote_margin: 0.0

@@ -51,7 +51,7 @@ def build_day(db_path: Path, day: str) -> bytes:
         for r in con.execute(
                 "SELECT s.id, s.token_id, s.ts, s.stage, s.price, s.entry_price, s.mcap, s.liq, s.fkeys, s.features, s.score, "
                 "s.prob, s.model_ver, s.gate, s.called, s.hit, s.stopped, s.peak_mult, s.min_mult, s.end_mult, s.peak_mcap, "
-                "s.t_hit, s.t_stop, s.t_peak, s.end_reason, t.chain, t.symbol, t.name, t.launchpad, t.creator "
+                "s.t_hit, s.t_stop, s.t_peak, s.end_reason, s.fast_hit, s.t_fast, t.chain, t.symbol, t.name, t.launchpad, t.creator "
                 "FROM snapshots s LEFT JOIN tokens t ON t.id = s.token_id WHERE s.ts >= ? AND s.ts < ? AND s.done = 1",
                 (start, end)):
             row = dict(r)

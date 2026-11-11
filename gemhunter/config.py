@@ -63,6 +63,7 @@ ENV_SETTINGS = {
     "AUTO_RETRAIN": "learn.auto_retrain",
     "GMGN_WEIGHT_PER_SEC": "sources.gmgn.weight_per_sec",
     "GMGN_BUDGET": "sources.gmgn.budget",
+    "GMGN_SHARED_USE": "sources.gmgn.shared_use",
     "MCAP_MIN_USD": "scope.mcap_min_usd",
     "MCAP_MAX_USD": "scope.mcap_max_usd",
 }

@@ -57,7 +57,7 @@ def candles(n: int = 60, price: float = 0.0003) -> list[dict]:
 
 class FakeGmgn:
     enabled = True
-    calls = errors = limited = spent = 0
+    calls = errors = limited = spent = skipped = 0
     remaining = None
     last_limit = None
     rate = 1.0
@@ -115,6 +115,18 @@ class FakeGoPlus:
     async def check(self, chain, address): return None
 
 
+class FakeGecko:
+    async def candles(self, chain, pool, hours=168): return None
+
+
+class FakeSocial:
+    async def look(self, chain, address, tg, web):
+        return {"a_tg_members": 2400.0, "a_tg_online": 120.0, "a_tg_online_pct": 5.0, "a_tg_is_channel": 0, "a_web_live": 1,
+                "a_web_own_domain": 1, "a_web_words": 600.0, "a_web_domain_age_d": 40.0, "fu_cg_listed": 0, "fu_claims_product": 1}
+
+    async def refresh_llama(self): pass
+
+
 class FakeTelegram:
     enabled, sent, failed = True, 0, 0
 
@@ -135,5 +147,6 @@ def make_engine(tmp_path, overrides: str = "") -> Engine:
     cfg = load_config()
     apply_overrides(cfg, f"app.data_dir={tmp_path.as_posix()};call.warmup_snapshots=0;{overrides}")
     eng = Engine(cfg)
-    eng.gmgn, eng.dex, eng.goplus, eng.telegram = FakeGmgn(), FakeDex(), FakeGoPlus(), FakeTelegram()
+    eng.gmgn, eng.dex, eng.goplus, eng.telegram, eng.social = FakeGmgn(), FakeDex(), FakeGoPlus(), FakeTelegram(), FakeSocial()
+    eng.gecko = FakeGecko()
     return eng

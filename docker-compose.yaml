@@ -20,7 +20,9 @@
 #   MCAP_MIN_USD / MCAP_MAX_USD  optional - the market-cap range (default 100000 / 700000)
 #   AUTO_RETRAIN              optional - true (default): retrain daily, switch only to a model that passes its tests
 #   GMGN_WEIGHT_PER_SEC       optional - the plan of the key: 5 free (default), 20 Plus, 50 Pro
-#   GMGN_BUDGET               optional - share of that plan this program may spend (default 0.2)
+#   GMGN_BUDGET               optional - share of that plan this program may spend (default 0.2; 0.7 with a key of its own)
+#   GMGN_SHARED_USE           optional - share of the plan another program spends on the same key (default 0.8;
+#                             0 when the key is Gem Hunter's alone)
 #   DOMAIN                    optional - defaults to this VPS's Hostinger hostname
 services:
   gemhunter:
@@ -41,6 +43,7 @@ services:
       AUTO_RETRAIN: ${AUTO_RETRAIN:-}
       GMGN_WEIGHT_PER_SEC: ${GMGN_WEIGHT_PER_SEC:-}
       GMGN_BUDGET: ${GMGN_BUDGET:-}
+      GMGN_SHARED_USE: ${GMGN_SHARED_USE:-}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}   # required: without it the dashboard stays off
       # login is enforced because bind_host is not localhost; cookies only over HTTPS
       GEM_OVERRIDES: "dashboard.bind_host=0.0.0.0;dashboard.cookie_secure=true;dashboard.base_url=https://${DOMAIN:-srv1479428.hstgr.cloud}/gems/"

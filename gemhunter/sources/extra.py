@@ -95,3 +95,32 @@ class Market:
     def factors(self, chain: str) -> dict:
         return {"mk_btc_chg_24h": self.chg.get("bitcoin"), "mk_native_chg_24h": self.chg.get(NATIVE.get(chain, "")),
                 "_native_usd": self.usd.get(NATIVE.get(chain, ""))}
+
+
+class Gecko:
+    """GeckoTerminal (free, no key): hourly candles of a pool - the price structure without spending GMGN budget."""
+
+    def __init__(self, http, cfg):
+        self.http, self.on = http, bool(cfg.enabled)
+        self.lim = http.limiter("geckoterminal", cfg.calls_per_min)
+        self.networks = dict(cfg.networks)
+
+    async def candles(self, chain: str, pool: str | None, hours: int = 168) -> list[dict] | None:
+        net = self.networks.get(chain)
+        if not (self.on and net and pool):
+            return None
+        d = await self.http.get_json(f"https://api.geckoterminal.com/api/v2/networks/{net}/pools/{pool}/ohlcv/hour",
+                                     params={"aggregate": 1, "limit": min(int(hours), 1000), "currency": "usd"}, limiter=self.lim)
+        try:
+            rows = d["data"]["attributes"]["ohlcv_list"]
+        except (KeyError, TypeError):
+            return None
+        out = []
+        for r in rows or []:                                   # [time, open, high, low, close, volume in USD], newest first
+            try:
+                t, o, h, l, c, v = (float(x) for x in r[:6])
+            except (TypeError, ValueError):
+                continue
+            if c > 0:
+                out.append({"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v, "amount": v / c})
+        return sorted(out, key=lambda c: c["time"]) or None

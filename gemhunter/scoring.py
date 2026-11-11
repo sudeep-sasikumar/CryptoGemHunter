@@ -71,7 +71,7 @@ def gates(f: dict, g, scope, final: bool = False) -> list[str]:
         bad.append(f"serial deployer ({f['d_created_n']:.0f} tokens)")
     if (f.get("own_dev_rug_n") or 0) > g.max_deployer_rugs:
         bad.append("deployer rugged an earlier call")
-    if final and g.require_security and not (f.get("s_checked") or f.get("gp_ok")):
+    if final and g.require_security and not (f.get("s_checked") or f.get("gp_ok") or f.get("s_list_check")):
         bad.append("no contract check answered")
     return bad
 
@@ -165,15 +165,34 @@ ITEMS = [
     ("attention", "smart / KOL signals", lambda f: hi((f.get("w_sig_smart_buy_n") or 0) + (f.get("w_sig_kol_buy_n") or 0), 0, 4)
      if f.get("a_sig_n_24h") is not None else None),
     ("attention", "market not falling", lambda f: hi(f.get("mk_native_chg_24h"), -8, 4)),
+    ("attention", "Telegram group is alive", lambda f: hi(f.get("a_tg_online_pct"), 0.5, 6)
+     if f.get("a_tg_members") and not f.get("a_tg_is_channel") else None),
+    ("attention", "Telegram community size", lambda f: hi(f.get("a_tg_members"), 100, 3000)),
+    ("attention", "calls picking up", lambda f: hi(f.get("a_tg_calls_per_h"), 0, 2)),
+    ("attention", "search interest rising", lambda f: hi(f.get("a_visits_per_h"), 0, 20)),
+    ("attention", "X account followed", lambda f: hi(f.get("a_x_followers"), 200, 20000)),
+    ("attention", "theme is trading now", lambda f: hi(f.get("m_meta_heat"), 0.02, 0.25)),
+    ("attention", "theme has recent winners", lambda f: hi(f.get("m_meta_winners_n"), 0, 3)),
+    ("attention", "original, not a copy", lambda f: flag(f.get("a_symbol_oldest"), 1.0, 0.2) if f.get("a_symbol_twins_n") else None),
+    # group 11: fundamentals - only for tokens that claim a product
+    ("fundamentals", "site on an aged domain", lambda f: hi(f.get("a_web_domain_age_d"), 14, 365) if f.get("fu_claims_product") else None),
+    ("fundamentals", "site has real content", lambda f: hi(f.get("a_web_words"), 150, 1500) if f.get("fu_claims_product") else None),
+    ("fundamentals", "code is active", lambda f: lo(f.get("fu_gh_pushed_d"), 7, 120) if f.get("fu_gh_repo") else None),
+    ("fundamentals", "code is its own", lambda f: flag(f.get("fu_gh_fork"), 0.2, 0.9) if f.get("fu_gh_repo") else None),
+    ("fundamentals", "usage on record", lambda f: hi(f.get("fu_tvl_usd"), 10000, 1000000)),
+    ("fundamentals", "audit on record", lambda f: flag(f.get("fu_audits_n"), 1.0, 0.4) if f.get("fu_tvl_usd") is not None else None),
+    ("fundamentals", "listed on CoinGecko", lambda f: 0.9 if f.get("fu_cg_listed") else None),
     # group 2: liquidity and market structure
     ("liquidity", "pool depth vs size", lambda f: band(f.get("l_liq_to_mcap"), 0.03, 0.08, 0.35, 0.8)),
     ("liquidity", "low slippage", lambda f: lo(f.get("l_slip_1k_pct"), 1, 8)),
 ]
 
 
-def scorecard(f: dict, weights) -> tuple[float, dict, list[str], list[str]]:
-    """(score 0-100, score per group 0-1, strongest points, weakest points)."""
-    groups: dict[str, list[float]] = {}
+def scorecard(f: dict, weights, tuning: dict | None = None) -> tuple[float, dict, list[str], list[str]]:
+    """(score 0-100, score per group 0-1, strongest points, weakest points). `tuning` (tuning.py) carries the
+    multipliers learned from graded snapshots: per item inside its group, and per group around its base weight."""
+    t_items, t_groups = (tuning or {}).get("items") or {}, (tuning or {}).get("groups") or {}
+    groups: dict[str, list[tuple[float, float]]] = {}
     marks: list[tuple[float, str, str]] = []
     for group, label, fn in ITEMS:
         try:
@@ -181,12 +200,13 @@ def scorecard(f: dict, weights) -> tuple[float, dict, list[str], list[str]]:
         except (TypeError, ValueError, ZeroDivisionError):
             v = None
         if v is not None:
-            groups.setdefault(group, []).append(v)
+            groups.setdefault(group, []).append((v, float((t_items.get(label) or {}).get("mult") or 1.0)))
             marks.append((v, label, group))
-    per = {g: (sum(groups[g]) / len(groups[g]) if groups.get(g) else 0.5) for g in weights}
-    total = sum(float(weights[g]) for g in weights) or 1.0
-    score = sum(per[g] * float(weights[g]) for g in weights) / total * 100
-    order = {g: -float(weights[g]) for g in weights}
+    per = {g: (sum(v * w for v, w in groups[g]) / sum(w for _, w in groups[g]) if groups.get(g) else 0.5) for g in weights}
+    wg = {g: float(weights[g]) * float((t_groups.get(g) or {}).get("mult") or 1.0) for g in weights}
+    total = sum(wg.values()) or 1.0
+    score = sum(per[g] * wg[g] for g in weights) / total * 100
+    order = {g: -wg[g] for g in weights}
     good = [m[1] for m in sorted((m for m in marks if m[0] >= 0.8), key=lambda m: (order.get(m[2], 0), -m[0]))][:6]
     bad = [m[1] for m in sorted((m for m in marks if m[0] <= 0.25), key=lambda m: (order.get(m[2], 0), m[0]))][:5]
     return round(score, 1), {g: round(v, 3) for g, v in per.items()}, good, ["weak: " + b for b in bad]

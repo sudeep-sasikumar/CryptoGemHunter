@@ -164,6 +164,23 @@ def entry_text(tok, f: dict, score: float, prob: float | None, model_ver: str | 
         buzz.append(f"vol 1h {money(f['f_vol_1h'])}")
     if buzz:
         lines.append(" · ".join(buzz))
+    crowd = []
+    if f.get("a_tg_members"):
+        crowd.append(f"Telegram {f['a_tg_members']:,.0f}" + (f" ({f['a_tg_online']:,.0f} online)" if f.get("a_tg_online") else ""))
+    if f.get("a_x_followers"):
+        crowd.append(f"X {f['a_x_followers']:,.0f} followers")
+    if f.get("narrative") and f["narrative"] not in ("meme", "other"):
+        crowd.append(f"theme: {esc(f['narrative'])}" + (f" ({f['m_meta_heat'] * 100:.0f}% of watched volume)" if f.get("m_meta_heat") else ""))
+    if f.get("a_symbol_twins_n"):
+        crowd.append("original ticker" if f.get("a_symbol_oldest") else f"{f['a_symbol_twins_n']:.0f} other tokens share the ticker")
+    if f.get("a_web_live") and f.get("a_web_own_domain"):
+        crowd.append("own site" + (f", domain {f['a_web_domain_age_d']:.0f} d old" if f.get("a_web_domain_age_d") is not None else ""))
+    if f.get("fu_cg_listed"):
+        crowd.append("on CoinGecko")
+    if f.get("fu_gh_repo"):
+        crowd.append("code pushed " + (f"{f['fu_gh_pushed_d']:.0f} d ago" if f.get("fu_gh_pushed_d") is not None else "?"))
+    if crowd:
+        lines.append(" · ".join(crowd))
     sec = []
     if f.get("s_checked") or f.get("gp_ok"):
         sec.append("no honeypot")

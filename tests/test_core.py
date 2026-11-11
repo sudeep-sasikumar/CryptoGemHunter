@@ -40,7 +40,10 @@ def test_gates_pass_and_fail():
     assert "mint authority not revoked" in gates(full(renounced_mint=0), CFG.gates, CFG.scope)
     assert "liquidity not burned or locked" in gates(full(burn_status="none", lock_percent=0.1), CFG.gates, CFG.scope)
     assert any("top 10" in g for g in gates(full(top_10_holder_rate=0.55), CFG.gates, CFG.scope))
-    assert "no contract check answered" in gates(full(), CFG.gates, CFG.scope, final=True)
+    assert gates(full(), CFG.gates, CFG.scope, final=True) == []          # the list answered mint / freeze: that is a check
+    f = full()
+    f.pop("s_list_check")
+    assert "no contract check answered" in gates(f, CFG.gates, CFG.scope, final=True)
     f = full()
     f.update({"d_created_n": 60, "d_open_ratio": 0.01})
     assert any("serial deployer" in g for g in gates(f, CFG.gates, CFG.scope))
@@ -184,3 +187,87 @@ def test_position_safety_triggers():
     p = Position(3, "sol:z", 0.0, 1.0, 300000, 60000)
     p.load_state({"sent": ["x2"], "armed": True, "dev_closed_at_entry": 1})
     assert p.armed and p.safety({"d_closed": 1}, 10, P) == []            # dev was already out at entry
+
+
+# ------------------------------------------------------------------ free social sources, narrative, fast grade, tuning
+def test_social_parsers():
+    from gemhunter.sources import social as S
+    assert S.tg_handle("https://t.me/gemtoken") == "gemtoken" and S.tg_handle("t.me/+AbCdEf123") == "+AbCdEf123"
+    assert S.tg_handle("https://x.com/gem") is None and S.tg_handle(None) is None
+    t = S.parse_telegram('<div class="tgme_page_extra">12 345 members, 678 online</div>')
+    assert t["a_tg_members"] == 12345 and t["a_tg_online"] == 678 and abs(t["a_tg_online_pct"] - 5.492) < 0.01 and t["a_tg_is_channel"] == 0
+    assert S.parse_telegram('<div class="tgme_page_extra">9 141 918 subscribers</div>')["a_tg_is_channel"] == 1
+    assert S.parse_telegram("<html>nothing</html>") == {}
+    assert S.registrable("app.gemtoken.xyz") == "gemtoken.xyz" and S.registrable("www.gem.co.uk") == "gem.co.uk"
+    w = S.parse_site("<html><script>var x=1</script><p>" + "word " * 300 + '</p><a href="https://github.com/gem/core">code</a> docs.gem.xyz audit</html>',
+                     200, "gemtoken.xyz")
+    assert w["a_web_live"] == 1 and w["a_web_own_domain"] == 1 and w["a_web_words"] >= 300 and w["_github"] == "gem/core"
+    assert w["fu_web_docs"] == 1 and w["fu_web_audit"] == 1
+    assert S.parse_site("", 200, "linktr.ee")["a_web_own_domain"] == 0 and S.parse_site("", 404, "gem.xyz")["a_web_live"] == 0
+    c = S.parse_coingecko({"id": "gem", "categories": ["Meme", "Dog-Themed"], "watchlist_portfolio_users": 420,
+                           "links": {"repos_url": {"github": ["https://github.com/gem/core"]}}})
+    assert c["fu_cg_listed"] == 1 and c["fu_cg_watchlist"] == 420 and c["_github"] == "gem/core" and c["_cg_categories"] == ["Meme", "Dog-Themed"]
+
+
+async def test_social_refuses_private_hosts():
+    from gemhunter.sources.social import public_host
+    for host in ("localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "", "[::1]"):
+        assert not await public_host(host.strip("[]")), host
+
+
+def test_narrative_theme_shape_and_heat():
+    from gemhunter import narrative as N
+    assert N.words("AgentCat", "The Official AI Agent Cat coin") == {"agent", "cat", "ai"}
+    assert N.theme(N.words("TRUMPDOG", "Trump Dog")) in ("dog", "political") and N.theme(N.words("GPT", "agent gpt")) == "ai"
+    assert N.theme(N.words("XYZ", "zzz qqq")) == "meme" and N.theme(N.words("XYZ", "zzz"), ["Decentralized Finance (DeFi)", "Yield"]) == "defi"
+    s = N.shape("GEM", "Gem Token", "", True)
+    assert s["a_symbol_len"] == 3 and s["a_name_words"] == 2 and s["a_has_logo"] == 1 and s["a_symbol_plain"] == 1
+    m = N.Meta()
+    m.rebuild([("a", N.words("CAT1", "space cat"), 5000), ("b", N.words("CAT2", "moon cat"), 3000), ("c", N.words("DOG", "dog"), 2000)])
+    m.set_winners([("CATX", "lucky cat"), ("FROG", "frog")])
+    f = m.factors("b", N.words("CAT2", "moon cat"))
+    assert abs(f["m_meta_heat"] - 5000 / 7000) < 1e-9 and f["m_meta_peers_n"] == 1 and f["m_meta_winners_n"] == 1
+    assert m.factors("c", N.words("DOG", "dog"))["m_meta_heat"] == 0 and m.factors("x", frozenset()) == {}
+
+
+def test_history_attention_velocity():
+    now = time.time()
+    obs = [(now - 7200, 1000, 20.0, 2e5, 4, 1, 100, 500), (now, 1100, 19.0, 3e5, 10, 3, 400, 700)]
+    f = F.from_history(obs)
+    assert f["a_tg_calls_per_h"] == 3 and f["a_callouts_per_h"] == 1 and f["a_visits_per_h"] == 150 and f["a_x_followers_per_h"] == 100
+
+
+def test_fast_grade():
+    L, t0 = CFG.label, 1000.0
+    f = Follow(1, 1.0, t0)
+    f.tick(1.2, 50000, t0 + 60, L)
+    assert f.fast is None
+    f.tick(1.55, 50000, t0 + 600, L)
+    assert f.fast == 1 and f.t_fast == 600 and not f.hit and not f.done           # fast winner, full grade still open
+    f.tick(0.6, 50000, t0 + 900, L)
+    assert f.fast == 1                                                              # the fast grade is final once set
+    g = Follow(2, 1.0, t0)
+    g.tick(0.69, 50000, t0 + 60, L)
+    assert g.fast == 0 and not g.done
+    h = Follow(3, 1.0, t0)
+    h.tick(1.1, 50000, t0 + L.fast.horizon_h * 3600 + 1, L)
+    assert h.fast == 0 and not h.done
+    k = Follow(4, 1.0, t0)
+    k.tick(None, 0.0, t0 + 60, L)
+    assert k.fast == 0 and k.done
+
+
+def test_tuning_multipliers_and_scorecard():
+    from gemhunter.tuning import auc, multiplier
+    assert auc([0.9, 0.8], [0.1, 0.2, 0.3]) == 1.0 and auc([0.1], [0.5, 0.9]) == 0.0 and auc([0.5], [0.5]) == 0.5 and auc([], [1]) is None
+    t = dict(CFG.learn.tune)
+    assert multiplier(None, 10, t, 0.3, 2.5) == 1.0
+    few, many = multiplier(0.8, 5, t, 0.3, 2.5), multiplier(0.8, 200, t, 0.3, 2.5)
+    assert 1.0 < few < 1.25 < many <= 2.5                    # 5 winners move a weight a little, 200 move it a lot
+    assert multiplier(0.2, 200, t, 0.3, 2.5) < 0.5 and multiplier(0.0, 10000, t, 0.3, 2.5) == 0.3
+    f = full(bundler_rate=0.28, top_10_holder_rate=0.10)
+    base = scorecard(f, CFG.score.weights)[0]
+    up = scorecard(f, CFG.score.weights, {"items": {"few bundlers": {"mult": 2.5}}})[0]
+    down = scorecard(f, CFG.score.weights, {"items": {"few bundlers": {"mult": 0.3}}, "groups": {}})[0]
+    assert up < base < down                                  # a weak mark weighs more or less inside its group
+    assert scorecard(f, CFG.score.weights, {"groups": {"manipulation": {"mult": 1.6}}})[0] != base
