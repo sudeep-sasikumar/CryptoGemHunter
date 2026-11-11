@@ -1,0 +1,164 @@
+# Gem Hunter - configuration. Signals only: this program never trades and holds no keys.
+# Secrets (GMGN key, Telegram, dashboard password) live in .env, not here.
+# Any value can be overridden without editing this file:  GEM_OVERRIDES="call.min_score=75;trade.stop_pct=35"
+# Every level below is a starting point from GEM_HUNTER_FACTORS.md, to be tuned on recorded outcomes.
+
+app:
+  data_dir: var              # database, models, logs
+  log_level: INFO
+
+chains: [sol, eth, base, bsc, robinhood]      # GMGN chain names
+
+scope:                       # the one tracker: micro caps that could run to multi-million
+  mcap_min_usd: 100000
+  mcap_max_usd: 700000
+
+# ---------------------------------------------------------------- data sources
+sources:
+  gmgn:
+    enabled: true
+    weight_per_sec: 5        # the plan of the key: 5 free, 20 Plus, 50 Pro (GMGN_WEIGHT_PER_SEC)
+    budget: 0.2              # share of the plan this program may spend (GMGN_BUDGET). 0.2 x 5 = 1 weight/s:
+                             # the key is shared with Launch Radar, which spends about 70%
+    rank:                    # /v1/market/rank: tokens trading now, filtered to the market-cap range by GMGN
+      every_s: 300           # one sweep per chain each time, rotating through `sweeps`
+      limit: 100
+      sweeps:
+        - {interval: 1h,  order_by: volume}
+        - {interval: 24h, order_by: volume}
+      filters:               # GMGN applies its own defaults when none are sent; ours leave the judging to `gates`
+        sol: [renounced, frozen]
+        evm: [not_honeypot]
+    trenches:                # /v1/trenches "completed": graduated launchpad tokens, with creator / wallet figures
+      every_s: 600
+      limit: 80
+    signals:                 # /v1/market/token_signal (14-16 are rejected by GMGN in queries)
+      every_s: 120
+      types: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 17, 18, 19, 20, 21]
+    smart:                   # smart-money and KOL trade feeds
+      every_s: 120
+      limit: 200
+      chains: [sol, bsc, base, eth, robinhood]
+    heavy_cooldown_s: 120    # after a refused holder / trader list (weight 5), leave them alone this long
+  dexscreener:               # free: price, market cap, liquidity, volume, buys / sells for 30 tokens per call
+    calls_per_min: 200
+    chain_ids: {sol: solana, eth: ethereum, base: base, bsc: bsc, robinhood: robinhood}
+  goplus:                    # free second contract check: owner powers GMGN does not report
+    enabled: true
+    calls_per_min: 20
+    chain_ids: {eth: "1", bsc: "56", base: "8453", robinhood: "4663"}
+  market:                    # BTC / chain coin trend (CoinGecko, free)
+    every_s: 900
+
+# ---------------------------------------------------------------- watching and snapshots
+watch:
+  price_every_s: 60          # DexScreener poll of every followed token
+  call_price_every_s: 20     # ... and of tokens with an open call
+  drop_after_h: 12           # stop watching a token not seen in the range for this long (follows continue)
+  max_tokens: 3000
+snapshot:                    # every factor as known at that moment, stored for every token - called or not
+  every_h: 6                 # a new snapshot of a token still in the range
+  max_per_token: 8
+label:                       # what happened next: the outcome every snapshot is graded on
+  target_mult: 3.0           # a hit = price reaches 3x the snapshot price ...
+  stop_mult: 0.5             # ... before falling to half of it ...
+  horizon_h: 168             # ... within 7 days
+  slippage_pct: 3            # the snapshot price is assumed this much worse than the last trade
+  dead_liq_usd: 1500         # liquidity under this = gone
+
+# ---------------------------------------------------------------- group 1: pass / fail
+gates:
+  max_tax_pct: 10
+  max_rug_ratio: 0.30        # GMGN's own high-risk level
+  min_lp_locked_pct: 80      # when not burned (a bonding curve counts as locked)
+  max_top10_pct: 40
+  max_bundler_pct: 30        # GMGN "safe" levels
+  max_insider_pct: 30
+  max_entrapment_pct: 30
+  max_dev_team_pct: 10
+  max_creator_pct: 5
+  min_liq_usd: 15000
+  min_liq_to_mcap: 0.03
+  serial_deployer: {min_created: 20, max_open_ratio: 0.05}
+  max_deployer_rugs: 0       # own history: a deployer whose earlier call ended on a safety exit is never called again
+  require_security: true     # no call unless a contract check answered
+
+# ---------------------------------------------------------------- scorecard (until a model has passed its tests)
+score:
+  weights:                   # the priority order of GEM_HUNTER_FACTORS.md
+    manipulation: 30         # groups 3 + 4
+    smart: 20                # group 6
+    flow: 18                 # group 7
+    retention: 12            # group 5
+    structure: 10            # group 8
+    attention: 7             # groups 9 + 10
+    liquidity: 3             # group 2
+
+deep:                        # the expensive look (holders, traders, candles, deployer history): top candidates only
+  min_score: 58
+  per_cycle: 2
+  max_per_hour: 30
+  cooldown_h: 3
+  holders: true              # weight 5 each on GMGN
+  traders: true
+  kline: {resolution: 1h, days: 7}
+  created_tokens: true
+
+call:
+  min_score: 70              # scorecard needed for a call (CALL_MIN_SCORE)
+  top_pct: 5                 # ... and in the best 5% of deep looks of the last 7 days (once 60 exist)
+  min_prob: 0.12             # with a model: minimum chance of a hit
+  target_precision: 0.25
+  max_per_day: 6             # CALLS_PER_DAY
+  max_open: 12
+  token_cooldown_h: 168      # one call per token per week
+
+# ---------------------------------------------------------------- the trade plan each call follows (Telegram updates)
+trade:
+  entry_slippage_pct: 3
+  stop_pct: 40               # exit at -40% from entry
+  trail: {arm_mult: 2.0, drop_pct: 50}        # past 2x: exit when price falls 50% from its peak
+  update_mults: [2, 3, 5, 10, 20, 50]
+  update_mcaps_usd: [1000000, 2000000, 5000000, 10000000]
+  max_days: 7
+  confirm_ticks: 2           # a stop must show on two polls in a row (one freak print does not exit)
+  safety:
+    check_every_s: 600       # GMGN look at each open call
+    liq_drop_pct: 50         # liquidity down this much from entry = pulled
+    dev_dump: true           # dev went from holding to sold
+    rug_ratio: 0.30
+    smart_exit_wallets: 3    # this many smart wallets selling within `smart_exit_window_min`
+    smart_exit_window_min: 60
+
+# ---------------------------------------------------------------- learning
+learn:
+  auto_retrain: true         # AUTO_RETRAIN
+  retrain_hours: 24
+  min_rows: 800              # labelled snapshots needed before a model is tried
+  min_pos: 40                # ... and winners among them
+  max_rows: 300000
+  lift_bins: 5
+  promote_margin: 0.0
+  wallets: {min_tokens: 3, min_lift: 2.0, early_n: 40}
+
+telegram:
+  enabled: true
+  thread_id:
+  silent_updates: false      # TELEGRAM_SILENT_UPDATES: trade updates without a sound (entries and exits always ring)
+  daily_summary_utc: "06:00"
+
+dashboard:
+  bind_host: 127.0.0.1       # the VPS compose file sets 0.0.0.0 (login enforced)
+  port: 8020
+  base_url: http://localhost:8020
+  session_days: 30
+  cookie_secure: false
+
+research:
+  sync_url: https://srv1479428.hstgr.cloud/gems/     # tools/sync_research.py signs in here
+
+storage:
+  max_gb: 5
+  snapshot_days: 180
+  bar_days: 30
+  event_days: 365

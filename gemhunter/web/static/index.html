@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gem Hunter</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --line:#262d38; --text:#dfe5ee; --dim:#8b96a8; --good:#3fb950; --bad:#f0655a;
+          --warn:#d9a13b; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:12px 18px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.3px; }
+  #status { color:var(--dim); font-size:12.5px; margin-left:auto; text-align:right; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; background:var(--bad); }
+  .dot.on { background:var(--good); }
+  nav { display:flex; gap:4px; padding:8px 14px 0; border-bottom:1px solid var(--line); overflow-x:auto; }
+  nav button { background:none; border:0; color:var(--dim); padding:8px 12px; cursor:pointer; font:inherit;
+               border-bottom:2px solid transparent; white-space:nowrap; }
+  nav button.on { color:var(--text); border-bottom-color:var(--accent); }
+  main { padding:16px 18px 60px; max-width:1500px; margin:0 auto; }
+  h2 { font-size:14px; margin:22px 0 8px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.6px; }
+  h2:first-child { margin-top:0; }
+  p.note { color:var(--dim); margin:4px 0 12px; max-width:900px; }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td { padding:7px 10px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--dim); font-weight:600; font-size:12px; background:var(--panel); }
+  tr:last-child td { border-bottom:0; }
+  tbody tr.click { cursor:pointer; } tbody tr.click:hover { background:#1c232d; }
+  td.num, th.num { text-align:right; }
+  td.wrapok { white-space:normal; max-width:420px; }
+  .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .dim { color:var(--dim); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+  .pill.open { color:var(--accent); border-color:#234a78; } .pill.win { color:var(--good); border-color:#245c33; }
+  .pill.loss { color:var(--bad); border-color:#6b2c27; } .pill.gate { color:var(--warn); border-color:#6b5320; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-bottom:6px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px; }
+  .card b { display:block; font-size:21px; font-weight:600; margin-top:2px; }
+  .card span { color:var(--dim); font-size:12px; }
+  .bar { display:inline-block; height:9px; border-radius:2px; background:var(--accent); vertical-align:middle; min-width:1px; }
+  .cells { display:flex; gap:3px; } .cell { padding:2px 6px; border-radius:3px; font-size:12px; color:#0e1116; min-width:52px; text-align:center; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding:30px 12px; overflow:auto; z-index:5; }
+  #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; width:min(1000px,100%); }
+  #modal .close { float:right; cursor:pointer; color:var(--dim); font-size:18px; }
+  .kv { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:2px 18px; font-size:12.5px; }
+  .kv div { display:flex; justify-content:space-between; border-bottom:1px dotted var(--line); padding:2px 0; }
+  .kv div span:first-child { color:var(--dim); }
+  .timeline { border-left:2px solid var(--line); margin:8px 0 8px 6px; padding-left:14px; }
+  .timeline div { margin:7px 0; position:relative; }
+  .timeline div::before { content:""; position:absolute; left:-20px; top:6px; width:9px; height:9px; border-radius:50%; background:var(--accent); }
+  .timeline div.exit::before { background:var(--bad); } .timeline div.exit.win::before { background:var(--good); }
+  .timeline div.warning::before { background:var(--warn); }
+  .filters { display:flex; gap:8px; margin:0 0 10px; flex-wrap:wrap; }
+  .filters button, .filters select { background:var(--panel); border:1px solid var(--line); color:var(--text); padding:5px 10px; border-radius:6px; font:inherit; cursor:pointer; }
+  .filters button.on { border-color:var(--accent); color:var(--accent); }
+  #login { max-width:320px; margin:90px auto; text-align:center; }
+  input { background:var(--panel); border:1px solid var(--line); color:var(--text); padding:9px 11px; border-radius:6px; font:inherit; width:100%; }
+  button.primary { margin-top:10px; width:100%; padding:9px; border-radius:6px; border:0; background:var(--accent); color:#06121f; font:inherit; font-weight:600; cursor:pointer; }
+  code { font-size:12px; color:var(--dim); }
+  svg.spark { display:block; width:100%; height:150px; background:#11161d; border:1px solid var(--line); border-radius:6px; margin:8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💎 Gem Hunter</h1>
+  <span class="dim">signals only — never trades, not financial advice</span>
+  <div id="status"></div>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div id="modal"><div class="box"><span class="close" onclick="closeModal()">✕</span><div id="modal-body"></div></div></div>
+<script>
+const TABS = [["calls","Calls"],["watch","Watching now"],["score","Scoreboard"],["learn","What it has learned"],["health","Health"]];
+let tab = location.hash.slice(1) || "calls", timer = null, callFilter = "all", chainFilter = "";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct = (x, d=0) => x == null ? "–" : (x*100).toFixed(d) + "%";
+const p100 = (x, d=0) => x == null ? "–" : Number(x).toFixed(d) + "%";
+const num = (x, d=2) => x == null ? "–" : Number(x).toFixed(d);
+const money = x => x == null ? "–" : x >= 1e6 ? "$"+(x/1e6).toFixed(2)+"M" : x >= 1e3 ? "$"+(x/1e3).toFixed(1)+"k" : "$"+Math.round(x);
+const ago = ts => { if (!ts) return "–"; const s = Date.now()/1000 - ts; return s < 90 ? Math.round(s)+"s" : s < 5400 ? Math.round(s/60)+"m" : s < 172800 ? (s/3600).toFixed(1)+"h" : Math.round(s/86400)+"d"; };
+const dur = s => s == null ? "–" : s < 90 ? Math.round(s)+"s" : s < 5400 ? Math.round(s/60)+"m" : s < 172800 ? (s/3600).toFixed(1)+"h" : (s/86400).toFixed(1)+"d";
+const when = ts => ts ? new Date(ts*1000).toISOString().slice(0,16).replace("T"," ") + " UTC" : "–";
+const CH = {sol:"Solana", eth:"Ethereum", base:"Base", bsc:"BSC", robinhood:"Robinhood"};
+const DEXCH = {sol:"solana", eth:"ethereum", base:"base", bsc:"bsc", robinhood:"robinhood"};
+const multCls = m => m == null ? "dim" : m >= 1.05 ? "good" : m < 0.95 ? "bad" : "";
+const mult = m => m == null ? "–" : `<span class="${multCls(m)}">${Number(m).toFixed(2)}x</span>`;
+const links = (chain, a) => `<a href="https://gmgn.ai/${esc(chain)}/token/${esc(a)}" target="_blank" rel="noopener">GMGN</a> · <a href="https://dexscreener.com/${DEXCH[chain]||esc(chain)}/${esc(a)}" target="_blank" rel="noopener">DexScreener</a>`;
+
+async function api(path, opt) {
+  const r = await fetch("api/" + path, Object.assign({credentials:"same-origin"}, opt || {}));
+  if (r.status === 401) { showLogin(); throw new Error("login"); }
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+function showLogin() {
+  clearInterval(timer);
+  $("#nav").innerHTML = "";
+  $("#main").innerHTML = `<div id="login"><h2>Sign in</h2><input id="pw" type="password" placeholder="Dashboard password" autofocus>
+    <button class="primary" onclick="login()">Sign in</button><p class="note" id="lerr"></p></div>`;
+  $("#pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+}
+async function login() {
+  const r = await fetch("api/login", {method:"POST", headers:{"Content-Type":"application/json"}, credentials:"same-origin",
+                                      body: JSON.stringify({password: $("#pw").value})});
+  if (r.ok) start(); else $("#lerr").textContent = r.status === 429 ? "Too many attempts - wait 15 minutes." : "Wrong password.";
+}
+function nav() {
+  $("#nav").innerHTML = TABS.map(([k, t]) => `<button class="${k===tab?"on":""}" onclick="go('${k}')">${t}</button>`).join("");
+}
+function go(k) { tab = k; location.hash = k; nav(); render(); }
+function closeModal() { $("#modal").style.display = "none"; }
+$("#modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+function table(head, rows) {
+  return `<div class="wrap"><table><thead><tr>${head.map(h => `<th class="${h[1]||""}">${h[0]}</th>`).join("")}</tr></thead><tbody>${rows.join("") || `<tr><td colspan="${head.length}" class="dim">Nothing yet.</td></tr>`}</tbody></table></div>`;
+}
+
+async function status() {
+  try {
+    const h = await api("health");
+    const fresh = Object.values(h.last_sweep_s || {}).some(s => s < 900);
+    $("#status").innerHTML = `<span class="dot ${fresh ? "on" : ""}"></span>${h.watching} watched · ${h.following} snapshots being graded · ${h.open_calls} open calls · deciding: ${esc(h.deciding)} · up ${dur(h.uptime_s)} · v${esc(h.version)}`;
+    return h;
+  } catch (e) { return null; }
+}
+
+// ------------------------------------------------------------------ calls
+function callState(c) {
+  if (c.status === "open") return `<span class="pill open">open</span>`;
+  return (c.exit_mult ?? 0) >= 1 ? `<span class="pill win">closed +</span>` : `<span class="pill loss">closed −</span>`;
+}
+async function calls() {
+  const all = await api("calls?limit=500");
+  const chains = [...new Set(all.map(c => c.chain))].filter(Boolean);
+  const rows = all.filter(c => (callFilter === "all" || c.status === callFilter) && (!chainFilter || c.chain === chainFilter));
+  const open = all.filter(c => c.status === "open"), closed = all.filter(c => c.status === "closed");
+  const wins = closed.filter(c => c.exit_mult >= 1).length;
+  const avg = closed.length ? closed.reduce((s, c) => s + (c.exit_mult || 0), 0) / closed.length : null;
+  const best = all.reduce((m, c) => Math.max(m, c.peak_mult || 0), 0);
+  $("#main").innerHTML = `
+    <div class="cards">
+      <div class="card"><span>Calls</span><b>${all.length}</b></div>
+      <div class="card"><span>Open now</span><b>${open.length}</b></div>
+      <div class="card"><span>Closed in profit</span><b>${closed.length ? wins + " / " + closed.length : "–"}</b></div>
+      <div class="card"><span>Average result (closed)</span><b>${avg == null ? "–" : avg.toFixed(2) + "x"}</b></div>
+      <div class="card"><span>Best peak</span><b>${best ? best.toFixed(1) + "x" : "–"}</b></div>
+    </div>
+    <div class="filters">
+      ${["all","open","closed"].map(k => `<button class="${callFilter===k?"on":""}" onclick="callFilter='${k}';render()">${k[0].toUpperCase()+k.slice(1)}</button>`).join("")}
+      <select onchange="chainFilter=this.value;render()"><option value="">All chains</option>${chains.map(c => `<option value="${esc(c)}" ${c===chainFilter?"selected":""}>${esc(CH[c]||c)}</option>`).join("")}</select>
+    </div>
+    ${table([["Called"],["Token"],["Chain"],["Entry mcap","num"],["Score","num"],["Now / result","num"],["Peak","num"],["Peak mcap","num"],["State"],["Exit reason"],["Held","num"]],
+      rows.map(c => `<tr class="click" onclick="callDetail(${c.id})">
+        <td>${ago(c.ts)} ago</td><td><b>${esc(c.symbol)}</b> <span class="dim">${esc((c.name||"").slice(0,24))}</span></td><td>${esc(CH[c.chain]||c.chain)}</td>
+        <td class="num">${money(c.entry_mcap)}</td><td class="num">${c.prob != null ? pct(c.prob) : num(c.score,0)}</td>
+        <td class="num">${mult(c.result_mult)}</td><td class="num">${mult(c.peak_mult)}</td><td class="num">${money(c.peak_mcap)}</td>
+        <td>${callState(c)}</td><td>${esc(c.exit_reason || "")}</td><td class="num">${dur((c.exit_ts || Date.now()/1000) - c.ts)}</td></tr>`))}
+    <p class="note">Click a call for its timeline (entry, every trade update, warnings, exit) and the factors it was called on. Results include 3% slippage on entry and on exit.</p>`;
+}
+function spark(bars, entry, events) {
+  if (!bars || bars.length < 3) return "";
+  const W = 960, H = 150, xs = bars.map(b => b[0]), ys = bars.map(b => b[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, entry) * 0.97, y1 = Math.max(...ys, entry) * 1.03;
+  const X = t => (t - x0) / (x1 - x0 || 1) * (W - 8) + 4, Y = v => H - 4 - (v - y0) / (y1 - y0 || 1) * (H - 8);
+  const path = bars.map((b, i) => (i ? "L" : "M") + X(b[0]).toFixed(1) + " " + Y(b[1]).toFixed(1)).join(" ");
+  const marks = (events || []).filter(e => e.ts >= x0 && e.ts <= x1).map(e =>
+    `<circle cx="${X(e.ts).toFixed(1)}" cy="${Y(e.price || entry).toFixed(1)}" r="4" fill="${e.kind==="exit"?"#f0655a":e.kind==="warning"?"#d9a13b":"#3fb950"}"><title>${esc(e.label)}</title></circle>`).join("");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="0" x2="${W}" y1="${Y(entry)}" y2="${Y(entry)}" stroke="#8b96a8" stroke-dasharray="4 4" stroke-width="1"/><path d="${path}" fill="none" stroke="#58a6ff" stroke-width="1.6"/>${marks}</svg>`;
+}
+const FGROUPS = [["s_","Contract safety"],["l_","Liquidity"],["d_","Deployer"],["h_","Holders and manipulation"],["c_","Cost basis and retention"],["w_","Smart money and wallets"],["f_","Order flow"],["p_","Price and lifecycle"],["a_","Attention"],["m","Market context"],["own_","Own history"],["gp_","GoPlus contract read"]];
+function factorPanel(f) {
+  const keys = Object.keys(f || {}).sort();
+  return FGROUPS.map(([pre, title]) => {
+    const ks = keys.filter(k => k.startsWith(pre));
+    return ks.length ? `<h2>${title}</h2><div class="kv">${ks.map(k => `<div><span>${esc(k)}</span><span>${typeof f[k] === "number" ? Number(f[k].toPrecision(4)) : esc(f[k])}</span></div>`).join("")}</div>` : "";
+  }).join("");
+}
+async function callDetail(id) {
+  const c = await api("call?id=" + id);
+  const r = c.reasons || {};
+  $("#modal-body").innerHTML = `
+    <h2>${esc(c.symbol)} — ${esc(c.name)} · ${esc(CH[c.chain]||c.chain)} ${callState(c)}</h2>
+    <p><code>${esc(c.address)}</code> · ${links(c.chain, c.address)}</p>
+    <div class="cards">
+      <div class="card"><span>Called</span><b style="font-size:15px">${when(c.ts)}</b></div>
+      <div class="card"><span>Entry mcap</span><b>${money(c.entry_mcap)}</b></div>
+      <div class="card"><span>${c.status === "open" ? "Now" : "Result"}</span><b>${mult(c.result_mult)}</b></div>
+      <div class="card"><span>Peak</span><b>${mult(c.peak_mult)}</b></div>
+      <div class="card"><span>Peak mcap</span><b>${money(c.peak_mcap)}</b></div>
+      <div class="card"><span>${c.prob != null ? "Model chance" : "Scorecard"}</span><b>${c.prob != null ? pct(c.prob) : num(c.score,0)}</b></div>
+    </div>
+    ${spark(c.bars, c.entry_price, c.events)}
+    <h2>Timeline</h2>
+    <div class="timeline">${c.events.map(e => `<div class="${esc(e.kind)} ${e.mult >= 1 ? "win" : ""}"><b>${esc(e.kind === "entry" ? "Entry" : e.kind === "exit" ? "Exit — " + e.label : e.label)}</b>
+      <span class="dim"> · ${when(e.ts)} · ${dur(e.ts - c.ts)} in</span><br>${mult(e.mult)} · mcap ${money(e.mcap)}${e.text ? " · " + esc(e.text) : ""}</div>`).join("")}</div>
+    ${r.good && r.good.length ? `<p><span class="good">Strong:</span> ${esc(r.good.join(", "))}</p>` : ""}
+    ${r.bad && r.bad.length ? `<p><span class="warn">Weak:</span> ${esc(r.bad.map(b => b.replace("weak: ","")).join(", "))}</p>` : ""}
+    ${r.groups ? `<div class="cells">${Object.entries(r.groups).map(([g, v]) => `<span class="cell" style="background:hsl(${Math.round(v*120)},55%,55%)" title="${esc(g)}">${esc(g)} ${Math.round(v*100)}</span>`).join("")}</div>` : ""}
+    ${factorPanel(c.factors)}`;
+  $("#modal").style.display = "flex";
+}
+
+// ------------------------------------------------------------------ watching
+async function watch() {
+  const rows = await api("candidates");
+  const ok = rows.filter(r => !r.gate || !r.gate.length);
+  $("#main").innerHTML = `
+    <p class="note">${rows.length} tokens in the market-cap range right now, best scorecard first. ${ok.length} pass every gate. A deep look (holders, traders, candles, deployer history) is spent on the best of them; only a deep look can lead to a call.</p>
+    ${table([["Token"],["Chain"],["Mcap","num"],["Liquidity","num"],["Score","num"],["Holders","num"],["Top 10","num"],["Bundlers","num"],["Insiders","num"],["Smart","num"],["Vol 1h","num"],["1h","num"],["Deep look"],["Gate / strengths"]],
+      rows.map(r => `<tr class="click" onclick="tokenDetail('${esc(r.id)}')">
+        <td><b>${esc(r.symbol)}</b>${r.open_call ? ' <span class="pill open">call open</span>' : ""}</td><td>${esc(CH[r.chain]||r.chain)}</td>
+        <td class="num">${money(r.mcap)}</td><td class="num">${money(r.liq)}</td><td class="num"><b>${num(r.score,0)}</b></td>
+        <td class="num">${r.holders ?? "–"}</td><td class="num">${p100(r.top10)}</td><td class="num">${p100(r.bundler)}</td><td class="num">${p100(r.insider)}</td>
+        <td class="num">${r.smart ?? "–"}</td><td class="num">${money(r.vol_1h)}</td><td class="num ${r.chg_1h > 0 ? "good" : r.chg_1h < 0 ? "bad" : ""}">${r.chg_1h == null ? "–" : r.chg_1h.toFixed(0) + "%"}</td>
+        <td>${r.deep_ts ? ago(r.deep_ts) + " ago" : "–"}</td>
+        <td class="wrapok">${r.gate && r.gate.length ? `<span class="pill gate">gated</span> <span class="dim">${esc(r.gate.join("; "))}</span>` : `<span class="dim">${esc((r.good||[]).join(", "))}</span>`}</td></tr>`))}`;
+}
+async function tokenDetail(id) {
+  const d = await api("token?id=" + encodeURIComponent(id));
+  const t = d.token, s = d.snapshots[0];
+  $("#modal-body").innerHTML = `
+    <h2>${esc(t.symbol)} — ${esc(t.name)} · ${esc(CH[t.chain]||t.chain)}</h2>
+    <p><code>${esc(t.address)}</code> · ${links(t.chain, t.address)}</p>
+    <div class="cards"><div class="card"><span>Mcap</span><b>${money(t.last_mcap)}</b></div><div class="card"><span>Peak mcap seen</span><b>${money(t.peak_mcap)}</b></div>
+      <div class="card"><span>Liquidity</span><b>${money(t.last_liq)}</b></div><div class="card"><span>First seen</span><b style="font-size:15px">${ago(t.first_seen)} ago</b></div></div>
+    ${d.live && d.live.gate && d.live.gate.length ? `<p><span class="warn">Gated:</span> ${esc(d.live.gate.join("; "))}</p>` : ""}
+    <h2>Snapshots</h2>
+    ${table([["When"],["Stage"],["Mcap","num"],["Score","num"],["Peak since","num"],["Low since","num"],["Outcome"]],
+      d.snapshots.map(x => `<tr><td>${ago(x.ts)} ago</td><td>${esc(x.stage)}</td><td class="num">${money(x.mcap)}</td><td class="num">${num(x.score,0)}</td>
+        <td class="num">${mult(x.peak_mult)}</td><td class="num">${mult(x.min_mult)}</td><td>${x.done ? (x.hit ? '<span class="good">hit</span>' : esc(x.end_reason || "no hit")) : '<span class="dim">being graded</span>'}</td></tr>`))}
+    ${s ? factorPanel(s.features) : ""}`;
+  $("#modal").style.display = "flex";
+}
+
+// ------------------------------------------------------------------ scoreboard
+async function score() {
+  const s = await api("scoreboard?days=90"), t = s.total, h = await status();
+  const tg = h ? h.plan.target_mult : 3;
+  $("#main").innerHTML = `
+    <div class="cards">
+      <div class="card"><span>Calls (90 days)</span><b>${t.n || 0}</b></div>
+      <div class="card"><span>Closed in profit</span><b>${t.closed ? (t.wins||0) + " / " + t.closed : "–"}</b></div>
+      <div class="card"><span>Average result</span><b>${t.avg_exit == null ? "–" : t.avg_exit.toFixed(2) + "x"}</b></div>
+      <div class="card"><span>Sum of results (1 unit per call)</span><b class="${(t.sum_r||0) >= 0 ? "good" : "bad"}">${t.sum_r == null ? "–" : (t.sum_r >= 0 ? "+" : "") + t.sum_r.toFixed(2)}</b></div>
+      <div class="card"><span>Reached 2x / 3x / 5x</span><b>${t.x2||0} / ${t.x3||0} / ${t.x5||0}</b></div>
+      <div class="card"><span>Reached $1M mcap</span><b>${t.m1||0}</b></div>
+    </div>
+    <h2>By chain</h2>
+    ${table([["Chain"],["Calls","num"],["Closed","num"],["In profit","num"],["Average result","num"],["Average peak","num"]],
+      s.by_chain.map(r => `<tr><td>${esc(CH[r.chain]||r.chain)}</td><td class="num">${r.n}</td><td class="num">${r.closed||0}</td><td class="num">${r.wins||0}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.avg_peak)}</td></tr>`))}
+    <h2>How calls ended</h2>
+    ${table([["Exit reason"],["Calls","num"],["Average result","num"]], s.by_exit.map(r => `<tr><td>${esc(r.exit_reason)}</td><td class="num">${r.n}</td><td class="num">${mult(r.avg_exit)}</td></tr>`))}
+    <h2>By day</h2>
+    ${table([["Day"],["Calls","num"],["Closed","num"],["In profit","num"],["Average result","num"],["Best peak","num"]],
+      s.by_day.map(r => `<tr><td>${esc(r.day)}</td><td class="num">${r.n}</td><td class="num">${r.closed||0}</td><td class="num">${r.wins||0}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.best_peak)}</td></tr>`))}
+    <h2>Does the score mean anything? (every graded snapshot, called or not)</h2>
+    <p class="note">Share of snapshots that reached ${tg}x before −50% within 7 days, by scorecard range. If higher scores do not hit more often, the scorecard is not working and the weights need changing.</p>
+    ${table([["Stage"],["Score"],["Snapshots","num"],[`Hit ${tg}x`,"num"],["Average peak","num"],[""]],
+      s.score_buckets.map(r => `<tr><td>${esc(r.stage)}</td><td>${r.bucket}–${r.bucket+10}</td><td class="num">${r.n}</td><td class="num">${pct(r.rate,1)}</td><td class="num">${mult(r.avg_peak)}</td><td><span class="bar" style="width:${Math.round((r.rate||0)*400)}px"></span></td></tr>`))}
+    <h2>Base rates</h2>
+    ${table([["Chain"],["Stage"],["Graded snapshots","num"],[`Hit ${tg}x`,"num"],["Average peak","num"]],
+      s.base_rates.map(r => `<tr><td>${esc(CH[r.chain]||r.chain)}</td><td>${esc(r.stage)}</td><td class="num">${r.n}</td><td class="num">${pct(r.rate,1)}</td><td class="num">${mult(r.avg_peak)}</td></tr>`))}
+    <h2>Do the gates remove losers?</h2>
+    ${table([["Snapshots"],["Count","num"],[`Hit ${tg}x`,"num"]], s.gated.map(r => `<tr><td>${r.gated ? "Failed a gate" : "Passed every gate"}</td><td class="num">${r.n}</td><td class="num">${pct(r.rate,1)}</td></tr>`))}`;
+}
+
+// ------------------------------------------------------------------ learning
+async function learn() {
+  const L = await api("learning"), g = L.graded || {}, last = L.last || {};
+  const base = (L.lift[0] || {}).base_rate;
+  $("#main").innerHTML = `
+    <div class="cards">
+      <div class="card"><span>Graded snapshots</span><b>${g.n || 0}</b><span>needs ${L.need.rows} for a first model</span></div>
+      <div class="card"><span>Winners among them</span><b>${g.hit || 0}</b><span>needs ${L.need.pos}</span></div>
+      <div class="card"><span>Deciding calls</span><b style="font-size:15px">${L.models.find(m => m.active) ? esc(L.models.find(m => m.active).ver) : "scorecard"}</b></div>
+      <div class="card"><span>Automatic retraining</span><b>${L.auto_retrain ? "on" : "off"}</b></div>
+      <div class="card"><span>Wallets tracked</span><b>${L.wallets.tracked}</b><span>${L.wallets.proven.length} proven</span></div>
+    </div>
+    <p class="note">Last retrain: ${last.ts ? when(last.ts) : "never"} — ${esc(last.note || last.verdict || "–")}. A new model replaces what is in use only if, on the newest data it has never seen, it clearly beats the scorecard, beats luck, and is no worse than the current model.</p>
+    <div class="filters"><button onclick="retrain(false)">Train a candidate and compare (changes nothing)</button><button onclick="retrain(true)">Train and switch if it passes</button><span id="rt" class="dim"></span></div>
+    <h2>What separates winners (hit rate per value range of each factor; base rate ${pct(base,1)})</h2>
+    ${table([["Factor"],["Coverage","num"],["Value ranges → hit rate"]],
+      L.lift.slice(1, 50).map(r => `<tr><td>${esc(r.feature)}</td><td class="num">${pct(r.coverage)}</td><td><div class="cells">${r.cells.map(c =>
+        `<span class="cell" style="background:hsl(${Math.round(Math.min(1, c.rate / ((base||0.05)*2)) * 120)},55%,55%)" title="${c.n} snapshots">${Number(c.lo.toPrecision(3))}…${Number(c.hi.toPrecision(3))}: ${pct(c.rate)}</span>`).join("")}</div></td></tr>`))}
+    <h2>Models</h2>
+    ${table([["Version"],["Trained"],["Snapshots","num"],["Winners","num"],["Top 5% picks hit","num"],["Scorecard top 5%","num"],["In use"]],
+      L.models.map(m => `<tr><td>${esc(m.ver)}</td><td>${when(m.ts)}</td><td class="num">${m.n_rows}</td><td class="num">${m.n_pos}</td>
+        <td class="num">${pct(((m.test||{}).model||{}).p_top5)}</td><td class="num">${pct(((m.test||{}).scorecard||{}).p_top5)}</td><td>${m.active ? '<span class="good">yes</span>' : ""}</td></tr>`))}
+    <h2>Proven wallets (early in tokens that later ran — this program's own list)</h2>
+    ${table([["Wallet"],["Tokens early in","num"],["Winners","num"],["× average","num"]],
+      L.wallets.proven.map(w => `<tr><td><code>${esc(w.addr)}</code></td><td class="num">${w.n_tok}</td><td class="num">${w.n_win}</td><td class="num">${w.lift}</td></tr>`))}
+    <h2>Deployers seen before</h2>
+    ${table([["Deployer"],["Tokens","num"],["Winners","num"],["Dead","num"],["Called","num"],["Safety exits","num"],["Best","num"]],
+      L.deployers.map(d => `<tr><td><code>${esc(d.addr)}</code></td><td class="num">${d.n_tok}</td><td class="num">${d.n_win}</td><td class="num">${d.n_dead}</td><td class="num">${d.n_called}</td><td class="num ${d.n_rug ? "bad" : ""}">${d.n_rug}</td><td class="num">${mult(d.best_mult)}</td></tr>`))}`;
+}
+async function retrain(promote) {
+  if (promote && !confirm("Train a new model and switch to it if it passes the tests?")) return;
+  try { await api("retrain", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({promote})}); $("#rt").textContent = "Retrain started - this page refreshes when it finishes."; }
+  catch (e) { $("#rt").textContent = "Could not start (one may already be running)."; }
+}
+
+// ------------------------------------------------------------------ health
+async function health() {
+  const h = await api("health"), g = h.gmgn;
+  $("#main").innerHTML = `
+    <div class="cards">
+      <div class="card"><span>Watching</span><b>${h.watching}</b><span>${h.in_scope} in range now</span></div>
+      <div class="card"><span>Snapshots being graded</span><b>${h.following}</b></div>
+      <div class="card"><span>Open calls</span><b>${h.open_calls}</b></div>
+      <div class="card"><span>Call threshold</span><b>${num(h.call_threshold,0)}</b><span>scorecard, when no model</span></div>
+      <div class="card"><span>Database</span><b>${h.db_mb} MB</b></div>
+      <div class="card"><span>Telegram</span><b>${h.telegram.enabled ? "on" : "off"}</b><span>${h.telegram.sent} sent, ${h.telegram.failed} failed</span></div>
+    </div>
+    <h2>Chains</h2>
+    ${table([["Chain"],["Tokens watched","num"],["Last GMGN sweep with results"]], Object.keys(h.by_chain).map(c => `<tr><td>${esc(CH[c]||c)}</td><td class="num">${h.by_chain[c]}</td><td>${h.last_sweep_s[c] == null ? '<span class="warn">none yet</span>' : dur(h.last_sweep_s[c]) + " ago"}</td></tr>`))}
+    <h2>GMGN (key shared with Launch Radar)</h2>
+    <div class="kv">
+      <div><span>Key set</span><span class="${g.enabled ? "good" : "bad"}">${g.enabled ? "yes" : "NO - nothing can be found"}</span></div>
+      <div><span>Budget</span><span>${num(g.budget_per_s,2)} weight / s</span></div>
+      <div><span>Requests</span><span>${g.calls}</span></div><div><span>Weight spent</span><span>${g.weight_spent}</span></div>
+      <div><span>Errors</span><span>${g.errors}</span></div><div><span>Rate-limited</span><span class="${g.limited ? "warn" : ""}">${g.limited}</span></div>
+      <div><span>Bucket left (GMGN)</span><span>${g.remaining ?? "–"}</span></div><div><span>Queue</span><span>${g.backlog_s} s</span></div>
+      <div><span>Holder / trader lists paused</span><span>${g.heavy_paused_s ? g.heavy_paused_s + " s" : "no"}</span></div>
+      <div><span>Last limit</span><span>${g.last_limit ? esc(g.last_limit.code) + " on " + esc(g.last_limit.path) + ", " + ago(g.last_limit.ts) + " ago" : "none"}</span></div>
+    </div>
+    ${g.unsupported.length ? `<p class="note warn">Not available on this key / chain: ${esc(g.unsupported.join(", "))}</p>` : ""}
+    <h2>Other sources</h2>
+    ${table([["Source"],["Requests","num"],["Errors","num"],["Rate-limited","num"]], Object.entries(h.apis).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${v.calls}</td><td class="num">${v.errors}</td><td class="num">${v.limited}</td></tr>`))}
+    <h2>Since start</h2>
+    <div class="kv">${Object.entries(h.counts).map(([k, v]) => `<div><span>${esc(k)}</span><span>${v}</span></div>`).join("")}</div>
+    ${h.errors.length ? `<h2>Recent problems</h2>${table([["When"],["What"]], h.errors.map(e => `<tr><td>${ago(e.ts)} ago</td><td>${esc(e.what)}</td></tr>`))}` : ""}`;
+}
+
+const VIEWS = {calls, watch, score, learn, health};
+async function render() {
+  try { await (VIEWS[tab] || calls)(); } catch (e) { if (e.message !== "login") $("#main").innerHTML = `<p class="note">Could not load: ${esc(e.message)}</p>`; }
+}
+async function start() {
+  nav();
+  await status();
+  await render();
+  clearInterval(timer);
+  timer = setInterval(() => { status(); if ($("#modal").style.display !== "flex" && tab !== "learn") render(); }, 30000);
+}
+window.addEventListener("hashchange", () => { const k = location.hash.slice(1); if (k && k !== tab && VIEWS[k]) { tab = k; nav(); render(); } });
+start();
+</script>
+</body>
+</html>

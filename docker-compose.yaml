@@ -1,0 +1,69 @@
+# Gem Hunter on a VPS (README "Running on the VPS").
+# Made for Hostinger Docker Manager -> "Compose from URL" with this file's raw GitHub link:
+#   https://raw.githubusercontent.com/sudeep-sasikumar/CryptoGemHunter/main/docker-compose.yaml
+# Hostinger downloads ONLY this file, so nothing here refers to other files. The image is built
+# by GitHub Actions (.github/workflows/docker-image.yml) on every push; a redeploy pulls the latest.
+#
+# HTTPS: the VPS already runs Traefik (set up for Ignition & Coil, shared with Launch Radar). The dashboard
+# is served under /gems/ on the same hostname, so it reuses that hostname's certificate: no new domain.
+#
+# Environment variables to enter in Docker Manager:
+#   GMGN_API_KEY              required - the same key Launch Radar uses (this program spends about 20% of its plan)
+#   TELEGRAM_BOT_TOKEN        from @BotFather (the bot Launch Radar posts with works)
+#   TELEGRAM_CHAT_ID          your chat id; several chats: comma-separated (a group id starts with -100)
+#   DASHBOARD_PASSWORD        required for the dashboard - pick a long one
+#   TELEGRAM_THREAD_ID        optional - post into one topic of a forum group
+#   TELEGRAM_SILENT_UPDATES   optional - true: trade updates arrive without a sound (entries and exits always ring)
+#   TELEGRAM_DAILY_SUMMARY_UTC optional - time of the daily summary, e.g. 06:00, or off
+#   CALL_MIN_SCORE            optional - scorecard needed for a call (default 70; higher = fewer calls)
+#   CALLS_PER_DAY             optional - most calls in 24 hours (default 6)
+#   MCAP_MIN_USD / MCAP_MAX_USD  optional - the market-cap range (default 100000 / 700000)
+#   AUTO_RETRAIN              optional - true (default): retrain daily, switch only to a model that passes its tests
+#   GMGN_WEIGHT_PER_SEC       optional - the plan of the key: 5 free (default), 20 Plus, 50 Pro
+#   GMGN_BUDGET               optional - share of that plan this program may spend (default 0.2)
+#   DOMAIN                    optional - defaults to this VPS's Hostinger hostname
+services:
+  gemhunter:
+    image: ghcr.io/sudeep-sasikumar/cryptogemhunter:latest
+    pull_policy: always                   # a redeploy picks up the newest image
+    restart: unless-stopped
+    environment:
+      GMGN_API_KEY: ${GMGN_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_THREAD_ID: ${TELEGRAM_THREAD_ID:-}
+      TELEGRAM_SILENT_UPDATES: ${TELEGRAM_SILENT_UPDATES:-}
+      TELEGRAM_DAILY_SUMMARY_UTC: ${TELEGRAM_DAILY_SUMMARY_UTC:-}
+      CALL_MIN_SCORE: ${CALL_MIN_SCORE:-}
+      CALLS_PER_DAY: ${CALLS_PER_DAY:-}
+      MCAP_MIN_USD: ${MCAP_MIN_USD:-}
+      MCAP_MAX_USD: ${MCAP_MAX_USD:-}
+      AUTO_RETRAIN: ${AUTO_RETRAIN:-}
+      GMGN_WEIGHT_PER_SEC: ${GMGN_WEIGHT_PER_SEC:-}
+      GMGN_BUDGET: ${GMGN_BUDGET:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}   # required: without it the dashboard stays off
+      # login is enforced because bind_host is not localhost; cookies only over HTTPS
+      GEM_OVERRIDES: "dashboard.bind_host=0.0.0.0;dashboard.cookie_secure=true;dashboard.base_url=https://${DOMAIN:-srv1479428.hstgr.cloud}/gems/"
+    volumes:
+      - gem_data:/app/var                 # database, learned models, logs (capped at 5 GB by the app)
+    expose:
+      - "8020"                            # reached only through Traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.gem-hunter.rule=Host(`${DOMAIN:-srv1479428.hstgr.cloud}`) && PathPrefix(`/gems`)
+      - traefik.http.routers.gem-hunter.entrypoints=websecure
+      - traefik.http.routers.gem-hunter.tls=true
+      - traefik.http.routers.gem-hunter.tls.certresolver=letsencrypt
+      - traefik.http.routers.gem-hunter.middlewares=gem-hunter-slash,gem-hunter-strip
+      # /gems -> /gems/ (the page loads its data with relative links), then strip /gems for the app
+      - traefik.http.middlewares.gem-hunter-slash.redirectregex.regex=^(https?://[^/]+/gems)$$
+      - traefik.http.middlewares.gem-hunter-slash.redirectregex.replacement=$${1}/
+      - traefik.http.middlewares.gem-hunter-slash.redirectregex.permanent=true
+      - traefik.http.middlewares.gem-hunter-strip.stripprefix.prefixes=/gems
+      - traefik.http.services.gem-hunter.loadbalancer.server.port=8020
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  gem_data:

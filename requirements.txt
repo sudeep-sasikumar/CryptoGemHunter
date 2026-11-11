@@ -1,0 +1,7 @@
+httpx==0.28.1
+PyYAML==6.0.3
+python-dotenv==1.2.4
+numpy==2.5.4
+scikit-learn==1.9.1
+fastapi==0.143.0
+uvicorn==0.54.0
