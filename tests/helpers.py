@@ -50,7 +50,8 @@ def candles(n: int = 60, price: float = 0.0003) -> list[dict]:
     now, out = time.time(), []
     for i in range(n):
         p = price * (0.6 + 0.4 * i / n)
-        out.append({"time": int(now - (n - i) * 3600), "open": p * 0.99, "high": p * 1.03, "low": p * 0.97, "close": p, "amount": 4000 + 50 * i})
+        out.append({"time": int(now - (n - i) * 3600), "open": p * 0.99, "high": p * 1.03, "low": p * 0.97, "close": p,
+                    "volume": 4000 + 50 * i, "amount": (4000 + 50 * i) / p})
     return out
 
 
@@ -132,7 +133,7 @@ class FakeTelegram:
 
 def make_engine(tmp_path, overrides: str = "") -> Engine:
     cfg = load_config()
-    apply_overrides(cfg, f"app.data_dir={tmp_path.as_posix()};{overrides}")
+    apply_overrides(cfg, f"app.data_dir={tmp_path.as_posix()};call.warmup_snapshots=0;{overrides}")
     eng = Engine(cfg)
     eng.gmgn, eng.dex, eng.goplus, eng.telegram = FakeGmgn(), FakeDex(), FakeGoPlus(), FakeTelegram()
     return eng

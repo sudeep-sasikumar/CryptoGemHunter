@@ -60,6 +60,10 @@ def gates(f: dict, g, scope, final: bool = False) -> list[str]:
     liq = f.get("l_liq_usd")
     if liq is not None and liq < g.min_liq_usd:
         bad.append("liquidity too thin")
+    if f.get("h_holders") is not None and f["h_holders"] < g.min_holders:
+        bad.append("too few holders")
+    if f.get("f_vol_24h") is not None and f["f_vol_24h"] < g.min_vol_24h_usd:
+        bad.append("almost no trading")
     if f.get("l_liq_to_mcap") is not None and f["l_liq_to_mcap"] < g.min_liq_to_mcap:
         bad.append("liquidity tiny against market cap")
     sd = g.serial_deployer
@@ -101,7 +105,7 @@ ITEMS = [
     # groups 3 + 4: manipulation and distribution - hardest to fake, most discriminating
     ("manipulation", "few bundlers", lambda f: lo(f.get("h_bundler_pct"), 3, 30)),
     ("manipulation", "few insiders", lambda f: lo(f.get("h_insider_pct"), 3, 30)),
-    ("manipulation", "no entrapment", lambda f: lo(f.get("h_entrapment_pct"), 2, 30)),
+    ("manipulation", "no entrapment", lambda f: lo(f.get("h_entrapment_pct"), 3, 30)),
     ("manipulation", "supply spread out", lambda f: lo(f.get("h_top10_pct"), 15, 40)),
     ("manipulation", "snipers gone", lambda f: lo(f.get("h_sniper_hold_pct"), 1, 15)),
     ("manipulation", "dev out or small", lambda f: 1.0 if f.get("d_closed") == 1 else lo(f.get("d_team_pct"), 1, 10)),
@@ -118,25 +122,25 @@ ITEMS = [
     ("manipulation", "deployer clean with us", lambda f: flag(f.get("own_dev_win_n"), 1.0, 0.5)
      if f.get("own_dev_prev_n") else None),
     # group 6: smart money and wallet quality
-    ("smart", "smart wallets bought", lambda f: hi(f.get("w_smart_bought_n") if f.get("w_smart_bought_n") is not None
-                                                 else f.get("w_smart_n"), 0, 5)),
+    ("smart", "many smart wallets", lambda f: hi(f.get("w_smart_n"), 3, 150)),
+    ("smart", "smart holders bought", lambda f: hi(f.get("w_smart_bought_n"), 0, 5)),
+    ("smart", "smart holders not seeded", lambda f: lo(f.get("w_smart_seeded_n"), 0, 3)),
     ("smart", "smart wallets converging", lambda f: hi(f.get("w_sm_converge_n"), 0, 3)),
     ("smart", "smart money net buying", lambda f: None if f.get("w_sm_net_usd_6h") is None or not (
         f.get("w_sm_buyers_6h") or f.get("w_sm_sellers_6h")) else hi(f["w_sm_net_usd_6h"], -2000, 3000)),
     ("smart", "smart money not exiting", lambda f: lo(f.get("w_smart_exited_n"), 0, 4)),
     ("smart", "not late to smart money", lambda f: lo(f.get("w_smart_entry_ratio") or f.get("w_sm_entry_ratio"), 1.2, 5)),
     ("smart", "no KOL-in smart-out", lambda f: flag(f.get("w_kol_in_smart_out"), 0.0, 0.7)),
-    ("smart", "blue-chip holders", lambda f: hi(f.get("w_bluechip_pct") if f.get("w_bluechip_pct") is not None
-                                              else f.get("w_bluechip_holders_pct"), 0, 12)),
+    ("smart", "blue-chip holders", lambda f: hi(f.get("w_bluechip_pct"), 10, 80) if f.get("chain") == "sol" else None),
     ("smart", "proven wallets early", lambda f: hi(f.get("own_proven_n"), 0, 3)),
     ("smart", "old wallets", lambda f: hi(f.get("w_age_median_d"), 5, 120)),
     # group 7: order flow, fees as the anchor for real demand
-    ("flow", "fees paid", lambda f: hi(f.get("f_fee_to_mcap"), 0.0005, 0.02)),
-    ("flow", "turnover vs pool", lambda f: band(f.get("f_vol1h_to_liq"), 0.05, 0.4, 4, 15)),
+    ("flow", "fees paid", lambda f: hi(f.get("f_fee_to_mcap"), 0.002, 0.12)),
+    ("flow", "turnover vs pool", lambda f: band(f.get("f_vol1h_to_liq"), 0.02, 0.3, 4, 15)),
     ("flow", "buyers outnumber sellers", lambda f: hi(f.get("f_buy_ratio_n_1h"), 0.42, 0.6)),
     ("flow", "money flowing in", lambda f: hi(f.get("f_buy_ratio_usd_1h"), 0.42, 0.62)),
     ("flow", "activity accelerating", lambda f: hi(f.get("f_swaps_accel_1h"), 0.5, 3)),
-    ("flow", "few bots", lambda f: lo(f.get("f_bot_pct"), 5, 40)),
+    ("flow", "few bots", lambda f: lo(f.get("f_bot_pct"), 10, 60)),
     ("flow", "many small buyers", lambda f: lo(f.get("f_buy_top5_share_pct"), 20, 70)),
     ("flow", "broad demand", lambda f: hi(f.get("f_buyer_seller_ratio"), 0.8, 2.5)),
     # group 5: holder cost basis and retention

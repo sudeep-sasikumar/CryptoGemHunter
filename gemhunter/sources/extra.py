@@ -77,6 +77,7 @@ class Market:
         self.http = http
         self.lim = http.limiter("coingecko", 4)
         self.chg: dict[str, float] = {}
+        self.usd: dict[str, float] = {}
 
     async def refresh(self) -> None:
         ids = sorted({"bitcoin", *NATIVE.values()})
@@ -87,6 +88,10 @@ class Market:
                 c = _f((v or {}).get("usd_24h_change")) if isinstance(v, dict) else None
                 if c is not None:
                     self.chg[k] = c
+                u = _f(v.get("usd")) if isinstance(v, dict) else None
+                if u:
+                    self.usd[k] = u
 
     def factors(self, chain: str) -> dict:
-        return {"mk_btc_chg_24h": self.chg.get("bitcoin"), "mk_native_chg_24h": self.chg.get(NATIVE.get(chain, ""))}
+        return {"mk_btc_chg_24h": self.chg.get("bitcoin"), "mk_native_chg_24h": self.chg.get(NATIVE.get(chain, "")),
+                "_native_usd": self.usd.get(NATIVE.get(chain, ""))}

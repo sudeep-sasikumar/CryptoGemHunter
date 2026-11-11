@@ -33,13 +33,16 @@ sources:
       every_s: 600
       limit: 80
     signals:                 # /v1/market/token_signal (14-16 are rejected by GMGN in queries)
-      every_s: 120
+      every_s: 300
       types: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 17, 18, 19, 20, 21]
     smart:                   # smart-money and KOL trade feeds
-      every_s: 120
+      every_s: 300
       limit: 200
       chains: [sol, bsc, base, eth, robinhood]
-    heavy_cooldown_s: 120    # after a refused holder / trader list (weight 5), leave them alone this long
+    ban_pause_s: 120         # stay away at least this long after a ban (a request during a ban lengthens it)
+    shared_use: 0.8          # share of the plan Launch Radar spends on the same key (0 when the key is this program's alone)
+    heavy_quiet_s: 2         # extra silence before a holder / trader list (weight 5 = the whole free bucket)
+    heavy_cooldown_s: 600    # after a refused one, leave them alone this long
   dexscreener:               # free: price, market cap, liquidity, volume, buys / sells for 30 tokens per call
     calls_per_min: 200
     chain_ids: {sol: solana, eth: ethereum, base: base, bsc: bsc, robinhood: robinhood}
@@ -78,6 +81,8 @@ gates:
   max_dev_team_pct: 10
   max_creator_pct: 5
   min_liq_usd: 15000
+  min_holders: 150           # e.g. Zora content coins: a market cap on paper, a dozen holders
+  min_vol_24h_usd: 5000      # nobody is trading it
   min_liq_to_mcap: 0.03
   serial_deployer: {min_created: 20, max_open_ratio: 0.05}
   max_deployer_rugs: 0       # own history: a deployer whose earlier call ended on a safety exit is never called again
@@ -96,8 +101,8 @@ score:
 
 deep:                        # the expensive look (holders, traders, candles, deployer history): top candidates only
   min_score: 58
-  per_cycle: 2
-  max_per_hour: 30
+  per_cycle: 1
+  max_per_hour: 12
   cooldown_h: 3
   holders: true              # weight 5 each on GMGN
   traders: true
@@ -105,8 +110,10 @@ deep:                        # the expensive look (holders, traders, candles, de
   created_tokens: true
 
 call:
-  min_score: 70              # scorecard needed for a call (CALL_MIN_SCORE)
-  top_pct: 5                 # ... and in the best 5% of deep looks of the last 7 days (once 60 exist)
+  min_score: 72              # scorecard needed for a call (CALL_MIN_SCORE)
+  top_pct: 3                 # ... and in the best 3% of every snapshot of the last 7 days
+  warmup_snapshots: 200      # no calls until this many snapshots exist to rank against (minutes after a first start)
+  max_per_hour: 2
   min_prob: 0.12             # with a model: minimum chance of a hit
   target_precision: 0.25
   max_per_day: 6             # CALLS_PER_DAY
@@ -123,7 +130,7 @@ trade:
   max_days: 7
   confirm_ticks: 2           # a stop must show on two polls in a row (one freak print does not exit)
   safety:
-    check_every_s: 600       # GMGN look at each open call
+    check_every_s: 900       # GMGN look at each open call
     liq_drop_pct: 50         # liquidity down this much from entry = pulled
     dev_dump: true           # dev went from holding to sold
     rug_ratio: 0.30

@@ -147,10 +147,11 @@ def entry_text(tok, f: dict, score: float, prob: float | None, model_ver: str | 
     lines.append(f"Top10 {p('h_top10_pct')} · Dev {p('d_team_pct', 1)}" + (" (sold)" if f.get("d_closed") == 1 else "")
                  + f" · Bundlers {p('h_bundler_pct')} · Insiders {p('h_insider_pct')} · Entrapment {p('h_entrapment_pct')} · "
                  f"Snipers hold {p('h_sniper_hold_pct')}")
-    smart = f.get("w_smart_bought_n") if f.get("w_smart_bought_n") is not None else f.get("w_smart_n")
+    smart = f.get("w_smart_bought_n") if f.get("w_smart_bought_n") else f.get("w_smart_n")
     buzz = []
     if smart:
-        buzz.append(f"{smart:.0f} smart wallets" + (" (bought)" if f.get("w_smart_bought_n") is not None else ""))
+        buzz.append(f"{smart:.0f} smart holders bought" if f.get("w_smart_bought_n")
+                    else f"{smart:.0f} smart wallets (GMGN count)")
     if f.get("w_sm_converge_n", 0) >= 2:
         buzz.append(f"{f['w_sm_converge_n']:.0f} smart buys within 30 min")
     if f.get("w_kol_n"):

@@ -78,7 +78,7 @@ class Engine:
         self.toks: dict[str, Tok] = {}
         self.positions: dict[int, Position] = {}
         self.pos_safety: dict[int, float] = {}
-        self.deep_scores: deque = deque(maxlen=5000)       # (ts, score) of deep looks: the call threshold's yardstick
+        self.scores: deque = deque(maxlen=60000)           # (ts, score) of every snapshot: the call threshold's yardstick
         self.deep_times: deque = deque(maxlen=500)
         self.model: Model | None = None
         self.last_train: dict = self.db.get("last_train", {}) or {}
@@ -98,8 +98,8 @@ class Engine:
         m = self.db.one("SELECT path FROM models WHERE active=1 ORDER BY id DESC LIMIT 1")
         if m and m["path"] and os.path.exists(m["path"]):
             self.model = Model.load(m["path"])
-        for r in self.db.query("SELECT ts, score FROM snapshots WHERE stage='deep' AND ts>? AND score IS NOT NULL", (now - 7 * 86400,)):
-            self.deep_scores.append((r["ts"], r["score"]))
+        for r in self.db.query("SELECT ts, score FROM snapshots WHERE ts>? AND score IS NOT NULL ORDER BY ts", (now - 7 * 86400,)):
+            self.scores.append((r["ts"], r["score"]))
         ids = {r["token_id"] for r in self.db.query("SELECT DISTINCT token_id FROM snapshots WHERE done=0")}
         ids |= {r["token_id"] for r in self.db.query("SELECT token_id FROM calls WHERE status='open'")}
         ids |= {r["id"] for r in self.db.query("SELECT id FROM tokens WHERE last_seen>?", (now - 3600,))}
@@ -284,6 +284,7 @@ class Engine:
             (tok.id, now, stage, price, entry, f.get("_mcap"), f.get("l_liq_usd"), kid, vals, score, prob,
              self.model.ver if self.model and prob is not None else None, "; ".join(gate)[:300] or None)).lastrowid
         tok.follows.append(Follow(sid, entry, now, f.get("_mcap")))
+        self.scores.append((now, score))
         self.counts["snapshots"] += 1
         return sid
 
@@ -337,7 +338,6 @@ class Engine:
         bad_gates, score, groups, good, bad, prob = self.judge(f, final=True)
         tok.score, tok.gate, tok.good, tok.bad, tok.groups, tok.eval_ts = score, bad_gates, good, bad, groups, now
         sid = self.snapshot(tok, f, "deep", score, prob, bad_gates, now)
-        self.deep_scores.append((now, score))
         self.db.commit()
         if sid and not bad_gates:
             why = self.call_block(tok, score, prob, now)
@@ -348,10 +348,14 @@ class Engine:
         elif bad_gates:
             log.info("deep look %s %s: score %.0f, gated (%s)", tok.chain, tok.symbol, score, "; ".join(bad_gates))
 
-    def call_threshold(self, now: float) -> float:
+    def call_threshold(self, now: float) -> float | None:
+        """Scorecard a call needs: the configured minimum, and the best `top_pct` of every snapshot of the last
+        7 days. None while too few snapshots exist to rank against."""
         c = self.cfg.call
-        recent = sorted(s for ts, s in self.deep_scores if now - ts < 7 * 86400)
-        if len(recent) < 60:
+        recent = sorted(s for ts, s in self.scores if now - ts < 7 * 86400)
+        if len(recent) < int(c.get("warmup_snapshots") or 0):
+            return None
+        if not recent:
             return float(c.min_score)
         return max(float(c.min_score), recent[min(len(recent) - 1, int(len(recent) * (1 - c.top_pct / 100)))])
 
@@ -366,10 +370,14 @@ class Engine:
             return "too many open calls"
         if self.db.one("SELECT COUNT(*) n FROM calls WHERE ts>?", (now - 86400,))["n"] >= c.max_per_day:
             return "daily call cap reached"
+        if self.db.one("SELECT COUNT(*) n FROM calls WHERE ts>?", (now - 3600,))["n"] >= int(c.get("max_per_hour") or 99):
+            return "hourly call cap reached"
         if self.model is not None and prob is not None:
             thr = max(self.model.thr, float(c.min_prob))
             return None if prob >= thr else f"chance {prob * 100:.0f}% under {thr * 100:.0f}%"
         thr = self.call_threshold(now)
+        if thr is None:
+            return f"warming up ({len(self.scores)}/{c.warmup_snapshots} snapshots)"
         return None if score >= thr else f"score under {thr:.0f}"
 
     async def open_call(self, tok: Tok, f: dict, sid: int, score: float, prob: float | None, good, bad, now: float) -> None:

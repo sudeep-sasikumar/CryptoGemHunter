@@ -25,7 +25,7 @@ RANK = ["address", "symbol", "price", "market_cap", "liquidity", "volume", "swap
         "renowned_count", "bluechip_owner_percentage", "history_highest_market_cap", "burn_status", "lock_percent",
         "renounced_mint", "is_honeypot", "is_open_source", "is_renounced", "buy_tax", "creator", "launchpad_platform",
         "creation_timestamp", "open_timestamp", "gas_fee", "bot_degen_rate", "cto_flag"]
-TRENCH = ["address", "usd_market_cap", "fresh_wallet_rate", "private_vault_hold_rate", "creator_created_count",
+TRENCH = ["address", "market_cap", "fresh_wallet_rate", "private_vault_hold_rate", "creator_created_count",
           "creator_created_open_count", "creator_balance_rate", "bundler_trader_amount_rate", "suspected_insider_hold_rate",
           "x_user_follower", "tg_call_count", "twitter_rename_count", "total_fee", "net_buy_24h", "complete_cost_time"]
 HOLDER = ["address", "amount_percentage", "avg_cost", "unrealized_pnl", "buy_tx_count_cur", "buy_volume_cur", "netflow_usd",

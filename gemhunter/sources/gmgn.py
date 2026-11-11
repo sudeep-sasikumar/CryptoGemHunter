@@ -63,8 +63,10 @@ class Gmgn:
         self._lock = asyncio.Lock()
         self.banned_until = 0.0
         self.heavy_until = 0.0
-        self.calls = self.errors = self.limited = self.spent = 0
+        self.calls = self.errors = self.limited = self.spent = self.strikes = 0
         self.remaining: float | None = None
+        self.remaining_ts = 0.0
+        self.shared_use = float(cfg.get("shared_use") or 0.0)      # share of the plan another program spends
         self.last_limit: dict | None = None
         self.unsupported: set[tuple[str, str]] = set()        # (path, chain) GMGN refused outright
         self.client = httpx.AsyncClient(
@@ -81,7 +83,9 @@ class Gmgn:
     def heavy_ok(self) -> bool:
         return self.enabled and time.time() >= self.heavy_until
 
-    async def _wait(self, weight: int) -> None:
+    async def _wait(self, weight: int, quiet: float = 0.0) -> None:
+        """Take the next slot in the pacing queue. `quiet` seconds without any request of ours come first: a
+        weight-5 list needs GMGN's whole free bucket (capacity 5), which only refills while we stay silent."""
         while True:
             ban = self.banned_until - time.time()
             if ban > 0:
@@ -89,10 +93,19 @@ class Gmgn:
                 continue
             async with self._lock:
                 now = time.monotonic()
-                delay = self._next - now
-                self._next = max(now, self._next) + self.gap * weight
-            if delay > 0:
-                await asyncio.sleep(delay)
+                start = max(now, self._next) + quiet
+                self._next = start + self.gap * weight
+            if start > now:
+                await asyncio.sleep(start - now)
+            # GMGN told us what was left in the bucket after our last request. Launch Radar draws on the same
+            # bucket, so only the part of the refill it leaves over is counted on; a request is sent when the
+            # estimate covers its weight with one unit to spare (a refused request risks a ban for both programs).
+            if self.remaining is not None:
+                refill = max(self.plan * (1.0 - self.shared_use), 0.5)
+                est = min(self.plan, self.remaining + (time.monotonic() - self.remaining_ts) * refill)
+                need = min(weight + 1.0, self.plan)
+                if est < need:
+                    await asyncio.sleep(min((need - est) / refill, 20.0))
             if time.time() >= self.banned_until:
                 return
 
@@ -103,7 +116,7 @@ class Gmgn:
         if path in HEAVY and not self.heavy_ok():
             return None
         weight = WEIGHT.get(path, 2)
-        await self._wait(weight)
+        await self._wait(weight, float(self.cfg.get("heavy_quiet_s") or 0) if path in HEAVY else 0.0)
         q = dict(query or {}, timestamp=int(time.time()), client_id=str(uuid.uuid4()))
         self.calls += 1
         self.spent += weight
@@ -115,7 +128,7 @@ class Gmgn:
             return None
         left = _f(r.headers.get("x-ratelimit-remaining"))
         if left is not None:
-            self.remaining = left
+            self.remaining, self.remaining_ts = left, time.monotonic()
         try:
             j = r.json()
         except ValueError:
@@ -126,10 +139,17 @@ class Gmgn:
             code = str(body_j.get("error") or body_j.get("code") or 429)[:40]
             reset = _f(body_j.get("reset_at")) or _f(r.headers.get("x-ratelimit-reset"))
             banned = "BANNED" in code.upper()
-            until = reset if reset and reset > time.time() else time.time() + (30 if banned else 6)
+            self.strikes += 1
+            # A request sent during a ban lengthens it, and our clock is not GMGN's: wait well past the stated
+            # reset, longer after every limit in a row (the key is shared: a ban here also stops Launch Radar).
+            # Measured 2026-11-11 with Launch Radar on the same key: a ban outlasts its stated reset, because every
+            # request either program sends meanwhile adds 5 s. So this program stays away for minutes, not seconds.
+            base = max(reset - time.time() if reset else 0.0, float(self.cfg.get("ban_pause_s") or 120) if banned else 5.0)
+            pause = min(base + (15.0 if banned else 5.0), 300.0) * min(2 ** (self.strikes - 1), 4)
+            until = time.time() + min(pause, 600.0)
             if path in HEAVY:
                 # the shared bucket rarely holds 5: leave the heavy lists alone for a while instead of retrying
-                self.heavy_until = time.time() + float(self.cfg.get("heavy_cooldown_s") or 120)
+                self.heavy_until = time.time() + float(self.cfg.get("heavy_cooldown_s") or 600)
             if until > self.banned_until + 1:
                 log.warning("GMGN rate limit (%s) on %s - no GMGN calls for %.0f s", code, path, until - time.time())
             self.banned_until = max(self.banned_until, until)
@@ -137,10 +157,11 @@ class Gmgn:
             self.last_limit = {"ts": time.time(), "path": path, "code": code, "pause_s": round(until - time.time(), 1)}
             self.gap = min(self.gap * 1.5, 4 * self.base_gap)
             return None
-        self.gap = max(self.base_gap, self.gap * 0.98)
-        if left is not None and left < 3:
-            async with self._lock:        # GMGN's bucket is nearly empty (Launch Radar draws on it too): let it refill
-                self._next = max(self._next, time.monotonic() + (3 - left) / self.plan)
+        self.strikes = 0
+        if left is not None and left <= 1:
+            self.gap = min(self.gap * 1.25, 6 * self.base_gap)      # the bucket is empty after us: we are taking too much
+        else:
+            self.gap = max(self.base_gap, self.gap * 0.95)
         if j is None:
             self.errors += 1
             return None

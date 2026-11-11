@@ -97,7 +97,8 @@ def from_rank(i: dict, interval: str) -> dict:
         "s_lp_locked_pct": pct(i.get("lock_percent")),
         "h_bundler_pct": pct(i.get("bundler_rate")),
         "d_burn_pct": pct(i.get("dev_token_burn_ratio")),
-        "w_bluechip_pct": pct(i.get("bluechip_owner_percentage")),
+        "w_bluechip_pct": min(pct(i.get("bluechip_owner_percentage")) or 0.0, 100.0)
+        if i.get("bluechip_owner_percentage") not in (None, "") else None,
         f"g_vol_{w}": num(i.get("volume")), f"g_swaps_{w}": num(i.get("swaps")),
         f"g_buys_{w}": num(i.get("buys")), f"g_sells_{w}": num(i.get("sells")),
         "f_gas_fee": num(i.get("gas_fee")),
@@ -118,7 +119,7 @@ def from_trench(i: dict) -> dict:
     f = _shared(i)
     created, opened = num(i.get("creator_created_count")), num(i.get("creator_created_open_count"))
     put(f, {
-        "_mcap": num(i.get("usd_market_cap")) or num(i.get("market_cap")),
+        "_mcap": num(i.get("market_cap")) or num(i.get("usd_market_cap")), "_price": num(i.get("price")),
         "s_open_source": yn(i.get("open_source")), "s_owner_renounced": yn(i.get("owner_renounced")),
         "h_bundler_pct": pct(i.get("bundler_trader_amount_rate")),
         "h_insider_hold_pct": pct(i.get("suspected_insider_hold_rate")),
@@ -129,6 +130,9 @@ def from_trench(i: dict) -> dict:
         else div(opened, created),
         "d_fund_age_h": (time.time() - num(i["fund_from_ts"])) / 3600 if num(i.get("fund_from_ts")) else None,
         "d_x_deleted_n": num(i.get("twitter_del_post_token_count")),
+        "d_x_tokens_n": num(i.get("twitter_create_token_count")),
+        "a_callouts": num(i.get("callout_count")), "p_og": yn(i.get("is_og")),
+        "d_burn_pct": pct(i.get("dev_token_burn_ratio")),
         "g_vol_1h": num(i.get("volume_1h")), "g_vol_24h": num(i.get("volume_24h")),
         "g_swaps_1m": num(i.get("swaps_1m")), "g_swaps_1h": num(i.get("swaps_1h")), "g_swaps_24h": num(i.get("swaps_24h")),
         "g_buys_24h": num(i.get("buys_24h")), "g_sells_24h": num(i.get("sells_24h")),
@@ -363,9 +367,14 @@ def early_buyers(holders: list[dict] | None, traders: list[dict] | None, n: int)
 
 # ------------------------------------------------------------------------------- candles
 def from_kline(candles: list[dict], price: float | None, created_ts: float | None, days: float) -> dict:
-    """Price structure from GMGN candles (oldest first; `amount` is the USD traded)."""
-    cs = [(num(c.get("time")), num(c.get("open")), num(c.get("high")), num(c.get("low")), num(c.get("close")),
-           num(c.get("amount")) or 0.0) for c in candles or []]
+    """Price structure from GMGN candles (oldest first, at most 100 per request)."""
+    def usd(c: dict) -> float:
+        # GMGN's docs call `amount` the USD figure; live answers (2026-11-11) carry USD in `volume` and token
+        # units in `amount`. Whichever of the two equals the other times the price is the USD one.
+        v, a, px = num(c.get("volume")) or 0.0, num(c.get("amount")) or 0.0, num(c.get("close")) or 0.0
+        return v if a and px and abs(a * px - v) <= abs(v * px - a) else a
+    cs = [(num(c.get("time")), num(c.get("open")), num(c.get("high")), num(c.get("low")), num(c.get("close")), usd(c))
+          for c in candles or []]
     cs = sorted((c for c in cs if None not in c[:5] and c[4] > 0), key=lambda c: c[0])
     if len(cs) < 6:
         return {"p_candles_n": len(cs)}
@@ -531,8 +540,10 @@ def derive(f: dict, now: float | None = None) -> dict:
         fee = f.get("l_pool_fee_pct") or 0.0
         for size, tag in ((500, "500"), (1000, "1k"), (5000, "5k")):
             f[f"l_slip_{tag}_pct"] = size / (depth + size) * 100 + fee
+    fee = f.get("f_total_fee") if f.get("f_total_fee") is not None else f.get("f_gas_fee")   # in the chain's native coin
     put(f, {"l_liq_vs_initial": div(liq, f.get("l_initial_liq")),
-            "f_fee_to_mcap": div(f.get("f_total_fee") if f.get("f_total_fee") is not None else f.get("f_gas_fee"), mcap),
+            "f_fee_usd": fee * f["_native_usd"] if fee is not None and f.get("_native_usd") else None,
+            "f_fee_to_mcap": div(fee * f["_native_usd"], mcap) if fee is not None and f.get("_native_usd") else None,
             "p_to_ath": div(mcap, f.get("p_ath_mcap")) if f.get("p_ath_mcap") else
             div(f.get("_price"), f.get("p_ath_price")),
             "a_boost_to_mcap": div(f.get("a_dex_boost"), mcap)})
