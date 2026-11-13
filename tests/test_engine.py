@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from gemhunter import factors as F
 from gemhunter.export import build_day, list_days
 from gemhunter.model import train
+from gemhunter.trade import Follow
 from gemhunter.web.server import build_app
 
 from .helpers import ADDR, CREATOR, make_engine, rank_item
@@ -206,9 +207,9 @@ async def test_learner_trains_tests_and_promotes(tmp_path):
         p = 0.02 + (0.5 if bundler < 6 and smart >= 4 else 0.0)
         hit = int(rng.random() < p)
         kid, vals = eng.db.pack({"chain": "sol", "stage": "scan", "h_bundler_pct": bundler, "w_smart_n": smart, "noise": rng.random()})
-        eng.db.execute("INSERT INTO snapshots(token_id, ts, stage, price, entry_price, mcap, fkeys, features, score, done, hit, peak_mult) "
-                       "VALUES(?,?,?,?,?,?,?,?,?,1,?,?)", (f"sol:t{i}", t0 + i * 2000, "scan", 1, 1.03, 3e5, kid, vals,
-                                                         rng.uniform(40, 70), hit, 3.5 if hit else 1.2))
+        eng.db.execute("INSERT INTO snapshots(token_id, ts, stage, price, entry_price, mcap, fkeys, features, score, done, hit, peak_mult, "
+                       "fast_hit) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?)", (f"sol:t{i}", t0 + i * 2000, "scan", 1, 1.03, 3e5, kid, vals,
+                                                                     rng.uniform(40, 70), hit, 3.5 if hit else 1.2, hit))
     eng.db.commit()
     report = await eng.retrain(promote=True)
     assert report["promoted"] and eng.model is not None, report.get("note") or report.get("verdict")
@@ -320,3 +321,44 @@ async def test_deep_look_completes_while_gmgn_is_banned(tmp_path):
     # less evidence, lower score: it is called only if it still clears the bar every call must clear
     assert eng.db.one("SELECT COUNT(*) n FROM calls")["n"] == int(snap["score"] >= eng.call_threshold(time.time()))
     eng.db.close()
+
+
+def test_bad_quotes_are_never_graded(tmp_path):
+    """A quote in the wrong unit (seen on Meteora curve tokens in GMGN's graduated list) must not become a snapshot,
+    and one freak tick must not make a hit."""
+    from .helpers import rank_item
+    eng = make_engine(tmp_path)
+    tr = F.from_trench({**rank_item(), "market_cap": 236000, "liquidity": 0.0023, "price": 3.8e-12})
+    assert "_price" not in tr and "l_liq_usd" not in tr
+    assert F.from_trench({**rank_item(), "market_cap": 236000, "liquidity": 50000})["l_liq_usd"] == 50000
+    tok = eng.touch("sol", ADDR, F.from_rank(rank_item(), "1h"), time.time())
+    assert eng.price_ok(tok, 0.0003, 300000) and not eng.price_ok(tok, 3.8e-12, 300000)
+    f = eng.factors(tok, time.time())
+    assert eng.snapshot(tok, {**f, "_price": 3.8e-12}, "scan", 60, None, [], time.time()) is None
+    assert eng.snapshot(tok, {**f, "l_liq_usd": 0.002}, "scan", 60, None, [], time.time()) is None
+    L = eng.cfg.label
+    fl = Follow(1, 1.0, 0.0)
+    fl.tick(1.1, 50000, 60, L)
+    fl.tick(60_000_000.0, 50000, 120, L)                 # one freak print
+    assert not fl.hit and fl.peak < 2 and fl.fast is None
+    fl.tick(1.2, 50000, 180, L)
+    assert fl.peak < 2
+    g = Follow(2, 1.0, 0.0)
+    g.tick(40.0, 50000, 60, L)
+    g.tick(41.0, 50000, 90, L)                           # confirmed on the next poll: a real move
+    assert g.hit and g.peak == 41.0
+    eng.db.close()
+
+
+def test_bad_quote_migration(tmp_path):
+    from gemhunter.db import DB
+    db = DB(tmp_path / "gems.db")
+    db.execute("DELETE FROM kv WHERE k='migr_bad_quotes_v1'")
+    for i, (liq, peak) in enumerate(((0.002, 6e7), (50000, 2.0), (50000, 5000.0))):
+        db.execute("INSERT INTO snapshots(token_id, ts, stage, price, liq, peak_mult) VALUES(?,?,?,?,?,?)", (f"t{i}", 1, "scan", 1, liq, peak))
+    db.put("tuning", {"items": {}})
+    db.commit()
+    db.close()
+    db = DB(tmp_path / "gems.db")
+    assert db.one("SELECT COUNT(*) n FROM snapshots")["n"] == 1 and db.get("tuning") is None and db.get("migr_bad_quotes_v1") == 2
+    db.close()

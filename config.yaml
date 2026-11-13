@@ -153,13 +153,16 @@ trade:
 learn:
   auto_retrain: true         # AUTO_RETRAIN
   retrain_hours: 12
-  min_rows: 500              # labelled snapshots needed before a model is tried
-  min_pos: 25                # ... and winners among them
+  min_rows: 300              # graded snapshots needed before a model is tried
+  min_pos: 30                # ... and winners among them
+  target: fast               # fast: 1.5x before -30% in a day; full: 3x before -50% in 7 days (too rare to learn from yet)
+  callable_only: true        # learn only from snapshots that passed every gate
   tune:                      # the scorecard re-weights itself from the fast grades (gemhunter/tuning.py)
     enabled: true
     every_h: 3
     min_winners: 5           # starts as soon as this many winners are graded
     min_rows: 60
+    callable_only: true      # gated tokens pump and dump: learning from them rewards manipulation
     window_days: 14
     strength: 2.0
     prior_winners: 30        # doubt: with 5 winners a multiplier moves about a seventh of the way

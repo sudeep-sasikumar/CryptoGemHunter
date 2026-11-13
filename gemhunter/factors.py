@@ -119,12 +119,22 @@ def from_rank(i: dict, interval: str) -> dict:
     return f
 
 
+def _plausible_liq(liq: float | None, mcap: float | None) -> float | None:
+    if liq is None or liq < 100 or (mcap and liq < 0.003 * mcap):
+        return None
+    return liq
+
+
 def from_trench(i: dict) -> dict:
     """One item of /v1/trenches "completed": the creator and wallet-label figures the rank list lacks."""
     f = _shared(i)
+    f.pop("l_liq_usd", None)                       # set below only when plausible (see _plausible_liq)
     created, opened = num(i.get("creator_created_count")), num(i.get("creator_created_open_count"))
     put(f, {
-        "_mcap": num(i.get("market_cap")) or num(i.get("usd_market_cap")), "_price": num(i.get("price")),
+        "_mcap": num(i.get("market_cap")) or num(i.get("usd_market_cap")),
+        # not `price` / `liquidity` as they stand: on some launchpads (Meteora curve, seen 2026-11-12) they are not in
+        # USD. The price is never taken from this list; liquidity only when it is plausible against the market cap.
+        "l_liq_usd": _plausible_liq(num(i.get("liquidity")), num(i.get("market_cap")) or num(i.get("usd_market_cap"))),
         "s_open_source": yn(i.get("open_source")), "s_owner_renounced": yn(i.get("owner_renounced")),
         "h_bundler_pct": pct(i.get("bundler_trader_amount_rate")),
         "h_insider_hold_pct": pct(i.get("suspected_insider_hold_rate")),

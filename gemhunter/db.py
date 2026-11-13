@@ -107,6 +107,12 @@ class DB:
             if name not in have:
                 self.con.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {kind}")
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_tokens_symbol ON tokens(symbol COLLATE NOCASE)")
+        if not self.con.execute("SELECT 1 FROM kv WHERE k='migr_bad_quotes_v1'").fetchone():
+            # snapshots taken on a quote in the wrong unit (liquidity under $100, or a "peak" of 1000x+ within a week)
+            # and the scorecard tuning learned partly from them and from gated pump-and-dumps
+            n = self.con.execute("DELETE FROM snapshots WHERE called=0 AND ((liq IS NOT NULL AND liq < 100) OR peak_mult > 1000)").rowcount
+            self.con.execute("DELETE FROM kv WHERE k IN ('tuning', 'tuning_last', 'lift', 'last_train_ts')")
+            self.con.execute("INSERT INTO kv(k, v) VALUES('migr_bad_quotes_v1', ?)", (str(n),))
         self._in_tx = False
         self._layouts: dict[tuple, int] = {}
         self._keys: dict[int, tuple] = {}

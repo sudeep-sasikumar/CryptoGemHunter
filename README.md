@@ -101,7 +101,7 @@ Three stages, each taking over only when it has earned it. Calls go out from the
 |---|---|---|---|
 | 1 | Scorecard, weights from the spec | day one | - |
 | 2 | **Tuned scorecard** | as soon as 5 winners are graded (hours) | fast grades, every 3 hours |
-| 3 | Learned model | once it beats the tuned scorecard on unseen data (500 full grades and 25 winners at least) | full grades, every 12 hours |
+| 3 | Learned model | once it beats the tuned scorecard on unseen data (300 graded snapshots and 30 winners at least) | fast grades, every 12 hours |
 
 1. **Grades.** Every snapshot gets a fast grade (1.5x before -30% within 24 hours, `label.fast`) and a full one (3x before
    -50% within 7 days, `label`). Fast grades arrive within hours and are what makes learning possible on day one.
@@ -110,7 +110,12 @@ Three stages, each taking over only when it has earned it. Calls go out from the
    it, groups are re-weighted the same way. The step is deliberately small while winners are few (with 5 winners a
    weight moves about a seventh of the way it would with hundreds), nothing is inverted or dropped, and the gates are
    never touched. The dashboard lists every item's separation and multiplier.
-3. **Model retrain** (`learn.auto_retrain`, `AUTO_RETRAIN`) every 12 hours once there are 500 full grades and 25 winners.
+   **Only snapshots that passed every gate are learned from** (`learn.callable_only`, `learn.tune.callable_only`). Gated
+   tokens (insiders 70%, dev holding 88% ...) often pump 3-10x within the hour and then go to zero; counted as winners in
+   the first two days they taught the tuner that heavy manipulation is good.
+3. **Model retrain** (`learn.auto_retrain`, `AUTO_RETRAIN`) every 12 hours once there are 300 graded snapshots and 30
+   winners. It learns the fast grade (`learn.target: fast`): in the first two days 1 of 335 gate-passing snapshots reached
+   3x before -50%, too few to learn from.
    History is split by time: fit on the oldest 70%, test on the newest 15% it never saw. The new model replaces what
    is in use only if it clearly beats the scorecard, beats luck, and is no worse than the current model.
 4. **Readable output.** Dashboard tab "What it has learned": for every factor, the hit rate in each value range - what
@@ -203,6 +208,11 @@ Without Telegram settings, messages are printed to the console.
   reached only Solana, Base, BSC and Robinhood) and holder / trader lists (weight 5, the whole free bucket) rarely answer.
   **A separate GMGN key for Gem Hunter, or a Plus plan, removes this** - then set `GMGN_BUDGET=0.7` (own key) or
   `GMGN_WEIGHT_PER_SEC=20`, and `GMGN_SHARED_USE=0`.
+- **GMGN's graduated list does not always quote in USD.** On Meteora curve tokens its `price` and `liquidity` came in
+  another unit (price 4e-12 on a $236K token), which made the next DexScreener price look like a 60-million-x hit; 94 such
+  snapshots were removed on 2026-11-13. The price is now never taken from that list, every snapshot's price must agree
+  with its market cap and with the last price seen, and a move of 25x or more in one poll counts only when the next poll
+  confirms it.
 - **The first hours run on the spec's weights**, scaled on one hour of live data, not on outcomes. Tuning starts with
   5 graded winners and moves in small steps; a learned model needs days.
 - **Tokens are followed by price polls** (20 s for open calls, 60 s for the rest), not trade by trade: a very brief
@@ -233,5 +243,5 @@ tools/sync_research.py     PC: daily copy of the research files + traits report
 tools/analyze.py           PC: what the runners had in common
 tools/retrain.py           PC: ask the VPS for a retrain
 tools/probe_gmgn.py        PC: check GMGN routes and fields with your key
-tests/                     31 tests
+tests/                     33 tests
 ```

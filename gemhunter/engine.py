@@ -179,8 +179,8 @@ class Engine:
                         f.get("a_callouts") if f.get("a_callouts") is not None else last[5],
                         f.get("a_visits") if f.get("a_visits") is not None else last[6],
                         f.get("a_x_followers") if f.get("a_x_followers") is not None else last[7]))
-        if now - tok.dex_ts > 300 and f.get("_price"):          # DexScreener has not priced it: GMGN's price follows it
-            self.on_price(tok, f["_price"], mcap, f.get("l_liq_usd"), now)
+        if now - tok.dex_ts > 300 and f.get("_price") and self.price_ok(tok, f["_price"], mcap):
+            self.on_price(tok, f["_price"], mcap, f.get("l_liq_usd"), now)   # DexScreener has not priced it: GMGN's does
         return tok
 
     def factors(self, tok: Tok, now: float) -> dict:
@@ -305,9 +305,20 @@ class Engine:
         self.db.commit()
 
     # ------------------------------------------------------------------ snapshots, deep looks, calls
+    @staticmethod
+    def price_ok(tok: Tok, price: float | None, mcap: float | None) -> bool:
+        """A price agrees with the market cap the same source gives (price x supply) and with the last price seen.
+        Guards the grades against a quote in the wrong unit."""
+        if not price or price <= 0:
+            return False
+        supply = tok.lists.get("_supply") or tok.deep.get("_supply")
+        if supply and mcap and not (1 / 20 <= price * supply / mcap <= 20):
+            return False
+        return not (tok.price and tok.price_ts and not (1 / 50 <= price / tok.price <= 50))
+
     def snapshot(self, tok: Tok, f: dict, stage: str, score: float, prob: float | None, gate: list[str], now: float) -> int | None:
         price = f.get("_price")
-        if not price:
+        if not price or (f.get("l_liq_usd") is not None and f["l_liq_usd"] < 100) or not self.price_ok(tok, price, f.get("_mcap")):
             return None
         entry = price * (1 + self.cfg.label.slippage_pct / 100)
         kid, vals = self.db.pack(F.stored({**f, "stage": stage}))

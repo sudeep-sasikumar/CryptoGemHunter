@@ -1,5 +1,6 @@
 """The learner: turns labelled snapshots into the probability of a hit (label.target_mult before label.stop_mult
-inside label.horizon_h - 3x before -50% within 7 days by default).
+inside label.horizon_h - 3x before -50% within 7 days), or of a fast hit (learn.target: fast - 1.5x before -30% within
+a day), learned only from snapshots that passed every gate (learn.callable_only).
 
 Every retrain is a small honest experiment, split by time (never shuffled - tomorrow must be
 predicted from yesterday):
@@ -36,13 +37,18 @@ HALF_LIFE_DAYS = 45.0
 class Dataset:
     """Finished snapshots as a float32 matrix, oldest token first."""
 
-    def __init__(self, db_path: Path, max_rows: int, min_share: float = 0.02):
+    def __init__(self, db_path: Path, max_rows: int, min_share: float = 0.02, target: str = "full", callable_only: bool = True):
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
         try:
             self.layouts = {i: tuple(json.loads(k)) for i, k in con.execute("SELECT id, keys FROM feature_keys")}
             first = dict(con.execute("SELECT token_id, MIN(ts) FROM snapshots GROUP BY token_id"))
-            rows = con.execute("SELECT token_id, ts, fkeys, features, score, hit FROM snapshots WHERE done=1 "
-                               "ORDER BY ts DESC LIMIT ?", (max_rows,)).fetchall()
+            # target "fast": 1.5x before -30% within a day (known within hours); "full": 3x before -50% within 7 days.
+            # Measured 2026-11-13: of 335 snapshots that passed every gate, 1 reached the full target and 49 the fast one.
+            y = "fast_hit" if target == "fast" else "hit"
+            ready = "fast_hit IS NOT NULL" if target == "fast" else "done=1"
+            gate = "AND gate IS NULL" if callable_only else ""
+            rows = con.execute(f"SELECT token_id, ts, fkeys, features, score, {y} FROM snapshots WHERE {ready} {gate} "
+                               f"ORDER BY ts DESC LIMIT ?", (max_rows,)).fetchall()
         finally:
             con.close()
         rows.sort(key=lambda r: (first.get(r[0], r[1]), r[1]))      # a token's snapshots stay together, in time order
@@ -228,7 +234,7 @@ def train(db_path: Path, cfg: dict, call_cfg: dict, models_dir: Path, champion_p
     from .config import Section
     cfg, call_cfg = Section(cfg), Section(call_cfg)
     t0 = time.time()
-    ds = Dataset(db_path, cfg.max_rows)
+    ds = Dataset(db_path, cfg.max_rows, target=str(cfg.get("target") or "full"), callable_only=bool(cfg.get("callable_only", True)))
     y, prior, X, names, vocab = ds.y, ds.prior, ds.X, ds.names, ds.vocab
     n, pos = len(y), int(y.sum())
     report: dict = {"n_rows": n, "n_pos": pos, "base_rate": pos / n if n else None,

@@ -1,5 +1,6 @@
 """The scorecard tunes itself from the first hours on - long before a learned model can be trained.
 
+Only snapshots that passed every gate are used: what is learned is how to rank what could actually be called.
 Every snapshot gets a FAST grade (label.fast: 1.5x before -30% within 24 hours by default) besides the full one
 (3x before -50% within 7 days). Fast grades arrive within hours. Every few hours, once a handful of winners
 exist, each scorecard item is checked against them:
@@ -52,8 +53,9 @@ def tune(db_path: Path, weights: dict, cfg: dict) -> dict:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
     try:
         layouts = {i: json.loads(k) for i, k in con.execute("SELECT id, keys FROM feature_keys")}
-        rows = con.execute("SELECT fkeys, features, fast_hit, hit, done FROM snapshots WHERE ts>? AND (fast_hit IS NOT NULL OR done=1) "
-                           "ORDER BY ts DESC LIMIT 60000", (since,)).fetchall()
+        callable_only = "AND gate IS NULL" if cfg.get("callable_only", True) else ""
+        rows = con.execute(f"SELECT fkeys, features, fast_hit, hit, done FROM snapshots WHERE ts>? AND (fast_hit IS NOT NULL OR done=1) "
+                           f"{callable_only} ORDER BY ts DESC LIMIT 60000", (since,)).fetchall()
     finally:
         con.close()
     ys, marks = [], []
