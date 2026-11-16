@@ -34,7 +34,10 @@ def load(src: Path, days: int | None) -> tuple[list[dict], list[dict]]:
             with gzip.open(p, "rt", encoding="utf-8") as fh:
                 for line in fh:
                     row = json.loads(line)
-                    (snaps if row.get("kind") == "snapshot" else calls if row.get("kind") == "call" else []).append(row)
+                    if row.get("kind") == "snapshot" and (row.get("done") is None or row.get("done")):
+                        snaps.append(row)                  # the report studies finished 7-day grades
+                    elif row.get("kind") == "call":
+                        calls.append(row)
         except (OSError, EOFError, ValueError):
             continue
     snaps.sort(key=lambda r: r["ts"])

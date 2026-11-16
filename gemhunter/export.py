@@ -1,4 +1,5 @@
-"""Research files: one gzip-compressed JSON-lines file per UTC day with every graded snapshot of that day
+"""Research files: one gzip-compressed JSON-lines file per UTC day with every graded snapshot of that day (fully graded,
+or with its fast grade known: `done` says which; peak_mult is the peak so far), every token first seen that day
 (all factors + what happened next), that day's calls with their full timeline, and the smart-money / signal
 events seen. Served by the dashboard (/api/research), copied to the PC by tools/sync_research.py, studied by
 tools/analyze.py. Holds token addresses and market data only: no keys, no passwords."""
@@ -30,7 +31,8 @@ def _ro(db_path: Path) -> sqlite3.Connection:
 def list_days(db_path: Path) -> list[dict]:
     con = _ro(db_path)
     try:
-        snaps = dict(con.execute("SELECT date(ts, 'unixepoch') d, COUNT(*) FROM snapshots WHERE done=1 GROUP BY d").fetchall())
+        snaps = dict(con.execute("SELECT date(ts, 'unixepoch') d, COUNT(*) FROM snapshots WHERE done=1 OR fast_hit IS NOT NULL "
+                                 "GROUP BY d").fetchall())
         calls = dict(con.execute("SELECT date(ts, 'unixepoch') d, COUNT(*) FROM calls GROUP BY d").fetchall())
     finally:
         con.close()
@@ -51,14 +53,18 @@ def build_day(db_path: Path, day: str) -> bytes:
         for r in con.execute(
                 "SELECT s.id, s.token_id, s.ts, s.stage, s.price, s.entry_price, s.mcap, s.liq, s.fkeys, s.features, s.score, "
                 "s.prob, s.model_ver, s.gate, s.called, s.hit, s.stopped, s.peak_mult, s.min_mult, s.end_mult, s.peak_mcap, "
-                "s.t_hit, s.t_stop, s.t_peak, s.end_reason, s.fast_hit, s.t_fast, t.chain, t.symbol, t.name, t.launchpad, t.creator "
-                "FROM snapshots s LEFT JOIN tokens t ON t.id = s.token_id WHERE s.ts >= ? AND s.ts < ? AND s.done = 1",
+                "s.t_hit, s.t_stop, s.t_peak, s.end_reason, s.fast_hit, s.t_fast, s.done, t.chain, t.symbol, t.name, t.launchpad, t.creator "
+                "FROM snapshots s LEFT JOIN tokens t ON t.id = s.token_id WHERE s.ts >= ? AND s.ts < ? AND (s.done = 1 OR s.fast_hit IS NOT NULL)",
                 (start, end)):
             row = dict(r)
             vals = json.loads(row.pop("features") or "null")
             keys = layouts.get(row.pop("fkeys"))
             row["f"] = dict(zip(keys, vals)) if keys and isinstance(vals, list) else (vals or {})
             put({"kind": "snapshot", **row})
+        # every token first seen that day: its market cap then, its highest and latest since (peak multiple of a token)
+        for r in con.execute("SELECT id, chain, symbol, name, launchpad, creator, created_ts, first_seen, first_mcap, peak_mcap, "
+                             "last_mcap, last_liq, last_seen FROM tokens WHERE first_seen >= ? AND first_seen < ?", (start, end)):
+            put({"kind": "token", **dict(r)})
         for r in con.execute("SELECT c.*, t.chain, t.symbol, t.address, t.launchpad FROM calls c LEFT JOIN tokens t "
                              "ON t.id = c.token_id WHERE c.ts >= ? AND c.ts < ?", (start, end)):
             row = dict(r)
