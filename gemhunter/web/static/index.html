@@ -155,7 +155,7 @@ async function calls() {
       rows.map(c => `<tr class="click" onclick="callDetail(${c.id})">
         <td>${ago(c.ts)} ago</td><td><b>${esc(c.symbol)}</b> <span class="dim">${esc((c.name||"").slice(0,24))}</span></td><td>${esc(CH[c.chain]||c.chain)}</td>
         <td class="num">${money(c.entry_mcap)}</td><td class="num">${c.prob != null ? pct(c.prob) : num(c.score,0)}</td>
-        <td class="num">${mult(c.result_mult)}</td><td class="num">${mult(c.peak_mult)}</td><td class="num">${money(c.peak_mcap)}</td>
+        <td class="num">${mult(c.result_mult)}${c.take_mult ? ' <span class="dim" title="50% sold at the profit-take">💰</span>' : ""}</td><td class="num">${mult(c.peak_mult)}</td><td class="num">${money(c.peak_mcap)}</td>
         <td>${callState(c)}</td><td>${esc(c.exit_reason || "")}</td><td class="num">${dur((c.exit_ts || Date.now()/1000) - c.ts)}</td></tr>`))}
     <p class="note">Click a call for its timeline (entry, every trade update, warnings, exit) and the factors it was called on. Results include 3% slippage on entry and on exit.</p>`;
 }
@@ -244,6 +244,7 @@ async function score() {
       <div class="card"><span>Closed in profit</span><b>${t.closed ? (t.wins||0) + " / " + t.closed : "–"}</b></div>
       <div class="card"><span>Average result</span><b>${t.avg_exit == null ? "–" : t.avg_exit.toFixed(2) + "x"}</b></div>
       <div class="card"><span>Sum of results (1 unit per call)</span><b class="${(t.sum_r||0) >= 0 ? "good" : "bad"}">${t.sum_r == null ? "–" : (t.sum_r >= 0 ? "+" : "") + t.sum_r.toFixed(2)}</b></div>
+      <div class="card"><span>Holding everything instead (no profit-take)</span><b class="${(t.sum_r_hold||0) >= 0 ? "good" : "bad"}">${t.sum_r_hold == null ? "–" : (t.sum_r_hold >= 0 ? "+" : "") + t.sum_r_hold.toFixed(2)}</b><span>average ${t.avg_exit_hold == null ? "–" : t.avg_exit_hold.toFixed(2) + "x"} · ${t.wins_hold||0} in profit · profit taken on ${t.taken||0} calls</span></div>
       <div class="card"><span>Reached 2x / 3x / 5x</span><b>${t.x2||0} / ${t.x3||0} / ${t.x5||0}</b></div>
       <div class="card"><span>Reached $1M mcap</span><b>${t.m1||0}</b></div>
     </div>
@@ -251,7 +252,7 @@ async function score() {
     ${table([["Chain"],["Calls","num"],["Closed","num"],["In profit","num"],["Average result","num"],["Average peak","num"]],
       s.by_chain.map(r => `<tr><td>${esc(CH[r.chain]||r.chain)}</td><td class="num">${r.n}</td><td class="num">${r.closed||0}</td><td class="num">${r.wins||0}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.avg_peak)}</td></tr>`))}
     <h2>How calls ended</h2>
-    ${table([["Exit reason"],["Calls","num"],["Average result","num"]], s.by_exit.map(r => `<tr><td>${esc(r.exit_reason)}</td><td class="num">${r.n}</td><td class="num">${mult(r.avg_exit)}</td></tr>`))}
+    ${table([["Exit reason"],["Calls","num"],["Average result","num"],["Holding everything","num"]], s.by_exit.map(r => `<tr><td>${esc(r.exit_reason)}</td><td class="num">${r.n}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.avg_hold)}</td></tr>`))}
     <h2>By day</h2>
     ${table([["Day"],["Calls","num"],["Closed","num"],["In profit","num"],["Average result","num"],["Best peak","num"]],
       s.by_day.map(r => `<tr><td>${esc(r.day)}</td><td class="num">${r.n}</td><td class="num">${r.closed||0}</td><td class="num">${r.wins||0}</td><td class="num">${mult(r.avg_exit)}</td><td class="num">${mult(r.best_peak)}</td></tr>`))}

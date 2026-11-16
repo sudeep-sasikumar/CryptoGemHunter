@@ -38,6 +38,7 @@ from the runners it missed and the losers it avoided, and what shows whether eac
 | Message | When |
 |---|---|
 | 💎 **Entry** | A token passes every gate after a deep look and scores in the best 3% of everything seen in the last 7 days (and at least 72/100). With a learned model in use: its chance of a hit is over the model's threshold. |
+| 💰 **Profit taken** (reply) | Price reaches 2x: half the position is sold (`trade.take_profit`); the rest runs on the stops below. Every exit records both results, with the profit-take and holding everything, and the Scoreboard shows both. |
 | 📈 **Trade update** (reply under the entry) | Price reaches 2x, 3x, 5x, 10x, 20x, 50x; market cap passes $1M, $2M, $5M, $10M. |
 | ⚠️ **Warning** (reply) | Bundlers start selling; KOLs buy while smart money sells; smart money starts selling. |
 | ✅ / 🛑 **Exit** (reply) | -40% stop · once past 2x, 50% off the peak (trailing stop) · safety trigger: liquidity down 50% from entry, dev went from holding to sold, rug ratio over 0.30, wash-trading or honeypot flag, 3+ smart wallets selling within an hour · 7 days. |

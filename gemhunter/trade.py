@@ -87,6 +87,7 @@ class Event:
     price: float | None = None
     mcap: float | None = None
     detail: str = ""
+    hold_mult: float | None = None    # exit only: the result had nothing been sold at the profit-take
 
 
 @dataclass
@@ -108,6 +109,8 @@ class Position:
     strikes: dict = field(default_factory=dict)     # exit condition -> polls in a row it has shown
     dev_closed_at_entry: int | None = None
     closed: bool = False
+    taken: float = 0.0            # share already sold at the profit-take (0.5 = half)
+    take_mult: float | None = None    # what that share fetched, slippage included
 
     def __post_init__(self):
         if self.peak_mcap is None:
@@ -115,12 +118,17 @@ class Position:
 
     def state(self) -> dict:
         return {"sent": self.sent, "warned": self.warned, "armed": self.armed,
-                "dev_closed_at_entry": self.dev_closed_at_entry}
+                "dev_closed_at_entry": self.dev_closed_at_entry, "taken": self.taken, "take_mult": self.take_mult}
 
     def load_state(self, s: dict | None) -> None:
         s = s or {}
         self.sent, self.warned = list(s.get("sent") or []), list(s.get("warned") or [])
         self.armed, self.dev_closed_at_entry = bool(s.get("armed")), s.get("dev_closed_at_entry")
+        self.taken, self.take_mult = float(s.get("taken") or 0.0), s.get("take_mult")
+
+    def blended(self, rest_mult: float) -> float:
+        """The call's result: the share sold at the profit-take plus the rest at `rest_mult`."""
+        return self.taken * (self.take_mult or 0.0) + (1 - self.taken) * rest_mult
 
     def _confirmed(self, key: str, cond: bool, need: int) -> bool:
         self.strikes[key] = self.strikes.get(key, 0) + 1 if cond else 0
@@ -150,6 +158,15 @@ class Position:
             for e in ev:
                 keep["mc" if e.label.startswith("market cap") else "x"] = e
             ev = list(keep.values())
+        tp = plan.get("take_profit") or {}
+        if tp and not self.taken and m >= float(tp["at_mult"]):
+            # sell part of the position at the first target; the rest runs on the same stops as before
+            self.taken = float(tp["sell_pct"]) / 100
+            self.take_mult = m * (1 - float(plan.entry_slippage_pct) / 100)
+            ev = [e for e in ev if e.label != f"{float(tp['at_mult']):g}x reached"]
+            ev.insert(0, Event("take", f"took {tp['sell_pct']:g}% profit at {m:.2f}x", m, price, mcap,
+                               f"{tp['sell_pct']:g}% sold at about {self.take_mult:.2f}x after slippage; "
+                               f"the rest runs on the trailing stop"))
         if not self.armed and m >= plan.trail.arm_mult:
             self.armed = True
         need = int(plan.get("confirm_ticks") or 1)

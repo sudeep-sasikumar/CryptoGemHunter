@@ -160,7 +160,10 @@ def build_app(engine) -> FastAPI:
             f"SELECT COUNT(*) n, SUM(status='open') open, SUM({closed}) closed, SUM({closed} AND exit_mult>=1) wins, "
             f"AVG(CASE WHEN {closed} THEN exit_mult END) avg_exit, AVG(peak_mult) avg_peak, MAX(peak_mult) best_peak, "
             f"SUM(peak_mult>=2) x2, SUM(peak_mult>=3) x3, SUM(peak_mult>=5) x5, SUM(peak_mcap>=1000000) m1, "
-            f"SUM(CASE WHEN {closed} THEN exit_mult-1 END) sum_r FROM calls WHERE ts>?", (since,))
+            f"SUM(CASE WHEN {closed} THEN exit_mult-1 END) sum_r, "
+            f"AVG(CASE WHEN {closed} THEN exit_mult_hold END) avg_exit_hold, SUM(CASE WHEN {closed} THEN exit_mult_hold-1 END) sum_r_hold, "
+            f"SUM({closed} AND exit_mult_hold>=1) wins_hold, SUM(take_mult IS NOT NULL) taken "
+            f"FROM calls WHERE ts>?", (since,))
         by_chain = db.query(
             f"SELECT t.chain, COUNT(*) n, SUM(c.{closed}) closed, SUM(c.{closed} AND c.exit_mult>=1) wins, "
             f"AVG(CASE WHEN c.{closed} THEN c.exit_mult END) avg_exit, AVG(c.peak_mult) avg_peak FROM calls c LEFT JOIN tokens t "
@@ -169,7 +172,8 @@ def build_app(engine) -> FastAPI:
             f"SELECT date(ts,'unixepoch') day, COUNT(*) n, SUM({closed}) closed, SUM({closed} AND exit_mult>=1) wins, "
             f"AVG(CASE WHEN {closed} THEN exit_mult END) avg_exit, MAX(peak_mult) best_peak FROM calls WHERE ts>? "
             f"GROUP BY day ORDER BY day DESC", (since,))
-        by_exit = db.query(f"SELECT exit_reason, COUNT(*) n, AVG(exit_mult) avg_exit FROM calls WHERE {closed} AND ts>? "
+        by_exit = db.query(f"SELECT exit_reason, COUNT(*) n, AVG(exit_mult) avg_exit, AVG(exit_mult_hold) avg_hold FROM calls "
+                           f"WHERE {closed} AND ts>? "
                            f"GROUP BY exit_reason ORDER BY n DESC", (since,))
         base = db.query("SELECT t.chain, s.stage, COUNT(*) n, AVG(s.hit) rate, AVG(s.peak_mult) avg_peak FROM snapshots s "
                         "LEFT JOIN tokens t ON t.id=s.token_id WHERE s.done=1 AND s.ts>? GROUP BY t.chain, s.stage "

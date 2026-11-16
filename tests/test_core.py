@@ -147,7 +147,8 @@ def test_position_ladder_updates_then_trailing_exit():
     p = Position(1, "sol:x", t0, 1.0, 300000, 60000)
     assert p.tick(1.5, 450000, 60000, t0 + 60, P) == []
     ev = p.tick(2.2, 660000, 60000, t0 + 120, P)
-    assert [e.label for e in ev] == ["2x reached"] and p.armed
+    assert [(e.kind, e.label) for e in ev] == [("take", "took 50% profit at 2.20x")] and p.armed
+    assert p.taken == 0.5 and abs(p.take_mult - 2.2 * 0.97) < 1e-9 and p.blended(1.0) == 0.5 * 2.2 * 0.97 + 0.5
     ev = p.tick(5.5, 1650000, 80000, t0 + 180, P)                          # jumps through 3x, 5x and $1M at once
     assert sorted(e.label for e in ev) == ["5x reached", "market cap passed $1M"]
     assert p.tick(5.4, 1620000, 80000, t0 + 240, P) == []                 # nothing is announced twice

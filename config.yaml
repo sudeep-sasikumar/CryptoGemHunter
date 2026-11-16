@@ -136,6 +136,7 @@ call:
 trade:
   entry_slippage_pct: 3
   stop_pct: 40               # exit at -40% from entry
+  take_profit: {at_mult: 2.0, sell_pct: 50}   # sell half at 2x; the rest runs on the stops below (both results recorded)
   trail: {arm_mult: 2.0, drop_pct: 50}        # past 2x: exit when price falls 50% from its peak
   update_mults: [2, 3, 5, 10, 20, 50]
   update_mcaps_usd: [1000000, 2000000, 5000000, 10000000]

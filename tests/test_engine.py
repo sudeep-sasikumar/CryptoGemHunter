@@ -62,15 +62,20 @@ async def test_full_cycle_call_updates_exit(tmp_path):
     await settle()
     eng.on_price(tok, 0.00125, 1250000, 90000, now + 1200)                  # 4x and past $1M
     await settle()
-    labels = [m[1].split("\n")[1] for m in eng.telegram.messages if m[0] == "update"]
-    assert labels == ["2x reached", "3x reached", "market cap passed $1M"] or "2x reached" in labels
+    labels = [m[1].split("\n")[1] for m in eng.telegram.messages if m[0] in ("update", "take")]
+    assert labels[0] == "took 50% profit at 2.10x" and "3x reached" in labels and "market cap passed $1M" in labels
+    assert "PROFIT TAKEN" in next(m[1] for m in eng.telegram.messages if m[0] == "take")
     assert all(m[2] == {"chat": 1} for m in eng.telegram.messages[1:])       # every update replies under the entry
     eng.on_price(tok, 0.00055, 550000, 90000, now + 1800)                   # 56% off the peak
     eng.on_price(tok, 0.00055, 550000, 90000, now + 1820)
     await settle()
     call = eng.db.one("SELECT * FROM calls")
     assert call["status"] == "closed" and "trailing stop" in call["exit_reason"] and not eng.positions
-    assert abs(call["exit_mult"] - 0.00055 / (0.0003 * 1.03) * 0.97) < 1e-6 and call["peak_mult"] > 4
+    rest = 0.00055 / (0.0003 * 1.03) * 0.97
+    taken = 0.00065 / (0.0003 * 1.03) * 0.97
+    assert abs(call["exit_mult_hold"] - rest) < 1e-6 and abs(call["take_mult"] - taken) < 1e-6 and call["peak_mult"] > 4
+    assert abs(call["exit_mult"] - (0.5 * taken + 0.5 * rest)) < 1e-6           # half at the take, half at the trailing stop
+    assert "holding everything would have given" in eng.telegram.messages[-1][1]
     assert eng.telegram.messages[-1][0] == "exit" and "EXIT" in eng.telegram.messages[-1][1]
     kinds = [r["kind"] for r in eng.db.query("SELECT kind FROM call_events ORDER BY id")]
     assert kinds[0] == "entry" and kinds[-1] == "exit" and kinds.count("update") >= 2

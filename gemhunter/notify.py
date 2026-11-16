@@ -206,7 +206,10 @@ def entry_text(tok, f: dict, score: float, prob: float | None, model_ver: str | 
         lines.append("✅ " + ", ".join(good))
     if bad:
         lines.append("⚠️ " + ", ".join(bad))
-    lines.append(f"📋 Plan: stop -{plan.stop_pct:g}% · past {plan.trail.arm_mult:g}x a {plan.trail.drop_pct:g}% trailing stop · "
+    tp = plan.get("take_profit") or {}
+    lines.append(f"📋 Plan: stop -{plan.stop_pct:g}% · "
+                 + (f"sell {tp['sell_pct']:g}% at {tp['at_mult']:g}x · " if tp else "")
+                 + f"past {plan.trail.arm_mult:g}x a {plan.trail.drop_pct:g}% trailing stop · "
                  f"updates at {', '.join(f'{m:g}x' for m in plan.update_mults[:4])} and $1M / $2M / $5M · {plan.max_days:g} days max")
     lines.append(f"<code>{esc(tok.address)}</code>")
     lines.append(links(tok.chain, tok.address, f))
@@ -214,14 +217,21 @@ def entry_text(tok, f: dict, score: float, prob: float | None, model_ver: str | 
     return "\n".join(lines)
 
 
-def event_text(symbol: str, ev, entry_price: float, held_s: float, peak: float) -> str:
+def event_text(symbol: str, ev, entry_price: float, held_s: float, peak: float, taken: float = 0.0,
+               take_mult: float | None = None) -> str:
     held = f"{held_s / 3600:.1f} h" if held_s < 172800 else f"{held_s / 86400:.1f} d"
     pnl = (ev.mult - 1) * 100
     now = f"now {ev.mult:.2f}x ({pnl:+.0f}%)" + (f" · mcap {money(ev.mcap)}" if ev.mcap else "")
     if ev.kind == "exit":
         icon = "✅" if ev.mult >= 1 else "🛑"
+        split = ""
+        if taken and take_mult and ev.hold_mult is not None:
+            split = (f"\n{taken * 100:.0f}% sold at {take_mult:.2f}x, the rest at {ev.hold_mult:.2f}x · "
+                     f"holding everything would have given {ev.hold_mult:.2f}x")
         return (f"{icon} <b>EXIT — {esc(symbol)}</b>\nReason: {esc(ev.label)}\nResult: <b>{ev.mult:.2f}x ({pnl:+.0f}%)</b> "
-                f"after {held} · best was {peak:.2f}x" + (f"\n{esc(ev.detail)}" if ev.detail else ""))
+                f"after {held} · best was {peak:.2f}x" + split + (f"\n{esc(ev.detail)}" if ev.detail else ""))
+    if ev.kind == "take":
+        return f"💰 <b>PROFIT TAKEN — {esc(symbol)}</b>\n{esc(ev.label)}\n{esc(ev.detail)} · held {held}"
     if ev.kind == "warning":
         return f"⚠️ <b>{esc(symbol)}</b> — {esc(ev.label)}\n{now} · held {held}"
     return f"📈 <b>TRADE UPDATE — {esc(symbol)}</b>\n{esc(ev.label)}\n{now} · held {held}"

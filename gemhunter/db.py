@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS calls (
   status TEXT DEFAULT 'open',                   -- open / closed
   peak_mult REAL DEFAULT 1, peak_mcap REAL, last_mult REAL DEFAULT 1, last_mcap REAL, last_ts REAL,
   state TEXT,                                   -- trade plan state (JSON): milestones sent, trail armed ...
-  exit_ts REAL, exit_price REAL, exit_mult REAL, exit_reason TEXT
+  exit_ts REAL, exit_price REAL, exit_mult REAL, exit_reason TEXT,
+  exit_mult_hold REAL,                           -- the result had nothing been sold at the profit-take
+  take_mult REAL                                 -- what the share sold at the profit-take fetched
 );
 CREATE INDEX IF NOT EXISTS ix_calls_ts ON calls(ts);
 
@@ -107,6 +109,13 @@ class DB:
             if name not in have:
                 self.con.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {kind}")
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_tokens_symbol ON tokens(symbol COLLATE NOCASE)")
+        have = {r["name"] for r in self.con.execute("PRAGMA table_info(calls)")}
+        for name in ("exit_mult_hold", "take_mult"):
+            if name not in have:
+                self.con.execute(f"ALTER TABLE calls ADD COLUMN {name} REAL")
+        # calls closed before the profit-take existed held everything: both results are the same
+        self.con.execute("UPDATE calls SET exit_mult_hold=exit_mult WHERE status='closed' AND exit_mult_hold IS NULL "
+                         "AND take_mult IS NULL")
         if not self.con.execute("SELECT 1 FROM kv WHERE k='migr_bad_quotes_v1'").fetchone():
             # snapshots taken on a quote in the wrong unit (liquidity under $100, or a "peak" of 1000x+ within a week)
             # and the scorecard tuning learned partly from them and from gated pump-and-dumps

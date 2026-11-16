@@ -286,22 +286,27 @@ class Engine:
         reply = message_ids(call["tg_msg"]) if call else {}
         slip = self.cfg.trade.entry_slippage_pct / 100
         for ev in events:
+            if ev.kind == "take":
+                ev.mult = p.take_mult or ev.mult
+                self.db.execute("UPDATE calls SET take_mult=?, state=? WHERE id=?", (p.take_mult, json.dumps(p.state()), p.call_id))
             if ev.kind == "exit":
-                ev.mult *= 1 - slip                        # the sell fills below the last price too
+                rest = ev.mult * (1 - slip)                # the sell fills below the last price too
                 ev.price = (ev.price or tok.price or 0) * (1 - slip) or None
+                ev.hold_mult, ev.mult = rest, p.blended(rest)    # result with the profit-take, and holding everything
                 rug = any(ev.label.startswith(x) for x in RUG_EXITS)
-                self.db.execute("UPDATE calls SET status='closed', exit_ts=?, exit_price=?, exit_mult=?, exit_reason=?, peak_mult=?, "
-                                "peak_mcap=?, last_mult=?, last_ts=?, state=? WHERE id=?",
-                                (now, ev.price, ev.mult, ev.label, p.peak, p.peak_mcap, p.last, now, json.dumps(p.state()), p.call_id))
+                self.db.execute("UPDATE calls SET status='closed', exit_ts=?, exit_price=?, exit_mult=?, exit_mult_hold=?, take_mult=?, "
+                                "exit_reason=?, peak_mult=?, peak_mcap=?, last_mult=?, last_ts=?, state=? WHERE id=?",
+                                (now, ev.price, ev.mult, rest, p.take_mult, ev.label, p.peak, p.peak_mcap, p.last, now,
+                                 json.dumps(p.state()), p.call_id))
                 self.history.call_closed(tok.creator, rug, now)
                 self.positions.pop(p.call_id, None)
-            text = event_text(tok.symbol or tok.address[:6], ev, p.entry, now - p.ts, p.peak)
+            text = event_text(tok.symbol or tok.address[:6], ev, p.entry, now - p.ts, p.peak, p.taken, p.take_mult)
             self.db.execute("INSERT INTO call_events(call_id, ts, kind, label, price, mcap, mult, text) VALUES(?,?,?,?,?,?,?,?)",
                             (p.call_id, now, ev.kind, ev.label, ev.price or tok.price, ev.mcap or tok.mcap, ev.mult, ev.detail))
             self.db.commit()
             log.info("call %d %s %s: %s (%.2fx)", p.call_id, tok.symbol, ev.kind, ev.label, ev.mult)
             await self.telegram.send(text, dedupe=f"call{p.call_id}:{ev.kind}:{ev.label}", kind=ev.kind, reply_to=reply,
-                                     silent=ev.kind == "update" and bool(self.cfg.telegram.silent_updates))
+                                     silent=ev.kind in ("update", "take") and bool(self.cfg.telegram.silent_updates))
         self.db.commit()
 
     # ------------------------------------------------------------------ snapshots, deep looks, calls
