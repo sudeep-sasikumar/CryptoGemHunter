@@ -37,7 +37,7 @@ from the runners it missed and the losers it avoided, and what shows whether eac
 
 | Message | When |
 |---|---|
-| 💎 **Entry** | A token passes every gate after a deep look and scores in the best 3% of everything seen in the last 7 days (and at least 72/100). With a learned model in use: its chance of a hit is over the model's threshold. |
+| 💎 **Entry** | Since 2026-11-20 every condition must hold: the learned model gives at least a 50% chance (`call.min_prob`); chain is Solana, Ethereum or BSC (`call.chains`); on EVM chains the LP is burned (`call.evm_require_lp_burned`); entrapment ≤ 5%, 1-hour volume 0.15-1x the market cap, within 20% of the high, at most 9 KOL wallets (`call.quality`). The scorecard no longer calls on its own (`call.scorecard_calls`). Robinhood and Base are still tracked and learned from. |
 | 💰 **Profit taken** (reply) | Price reaches 2x: half the position is sold (`trade.take_profit`); the rest runs on the stops below. Every exit records both results, with the profit-take and holding everything, and the Scoreboard shows both. |
 | 📈 **Trade update** (reply under the entry) | Price reaches 2x, 3x, 5x, 10x, 20x, 50x; market cap passes $1M, $2M, $5M, $10M. |
 | ⚠️ **Warning** (reply) | Bundlers start selling; KOLs buy while smart money sells; smart money starts selling. |
@@ -244,5 +244,5 @@ tools/sync_research.py     PC: daily copy of the research files + traits report
 tools/analyze.py           PC: what the runners had in common
 tools/retrain.py           PC: ask the VPS for a retrain
 tools/probe_gmgn.py        PC: check GMGN routes and fields with your key
-tests/                     33 tests
+tests/                     35 tests
 ```

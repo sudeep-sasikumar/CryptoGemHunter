@@ -60,6 +60,7 @@ ENV_SETTINGS = {
     "TELEGRAM_DAILY_SUMMARY_UTC": "telegram.daily_summary_utc",
     "CALLS_PER_DAY": "call.max_per_day",
     "CALL_MIN_SCORE": "call.min_score",
+    "CALL_MIN_PROB": "call.min_prob",
     "AUTO_RETRAIN": "learn.auto_retrain",
     "GMGN_WEIGHT_PER_SEC": "sources.gmgn.weight_per_sec",
     "GMGN_BUDGET": "sources.gmgn.budget",

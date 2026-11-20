@@ -98,6 +98,7 @@ class Engine:
         self.counts = {"rank": 0, "trench": 0, "signals": 0, "trades": 0, "snapshots": 0, "deep": 0, "calls": 0, "labels": 0}
         self.sweep_ts: dict[str, float] = {}
         self.errors: deque = deque(maxlen=20)
+        self.bad_quotes = 0
         self._tasks: list[asyncio.Task] = []
         self._bg: set[asyncio.Task] = set()
         self._sweep_i = 0
@@ -227,6 +228,11 @@ class Engine:
 
     # ------------------------------------------------------------------ prices, labels, trade plan
     def on_price(self, tok: Tok, price: float | None, mcap: float | None, liq: float | None, now: float) -> None:
+        if price and tok.price and not (1 / 25 <= price / tok.price <= 25):
+            agree = mcap and tok.mcap and 1 / 3 <= (price / tok.price) / (mcap / tok.mcap) <= 3
+            if not agree:                                  # a jump the market cap does not show: a bad quote
+                self.bad_quotes += 1
+                price = mcap = None
         if price:
             tok.price, tok.price_ts = price, now
         if mcap:
@@ -396,7 +402,7 @@ class Engine:
         sid = self.snapshot(tok, f, "deep", score, prob, bad_gates, now)
         self.db.commit()
         if sid and not bad_gates:
-            why = self.call_block(tok, score, prob, now)
+            why = self.call_block(tok, f, score, prob, now)
             if why is None:
                 await self.open_call(tok, f, sid, score, prob, good, bad, now)
             else:
@@ -415,9 +421,34 @@ class Engine:
             return float(c.min_score)
         return max(float(c.min_score), recent[min(len(recent) - 1, int(len(recent) * (1 - c.top_pct / 100)))])
 
-    def call_block(self, tok: Tok, score: float, prob: float | None, now: float) -> str | None:
+    def quality_block(self, tok: Tok, f: dict) -> str | None:
+        """The call filters learned from the first ten days (call.chains / evm_require_lp_burned / quality). A factor
+        with no value fails: a call needs the evidence."""
+        c = self.cfg.call
+        if c.get("chains") and tok.chain not in c.chains:
+            return f"no calls on {tok.chain}"
+        if c.get("evm_require_lp_burned") and tok.chain != "sol" and not (f.get("s_lp_burned") == 1 or f.get("l_on_curve") == 1):
+            return "EVM pool not burned"
+        q = c.get("quality") or {}
+        checks = (("entrapment", f.get("h_entrapment_pct"), None, q.get("max_entrapment_pct")),
+                  ("turnover 1h / mcap", f.get("f_vol1h_to_mcap"), q.get("min_vol1h_to_mcap"), q.get("max_vol1h_to_mcap")),
+                  ("distance to the high", f.get("p_to_ath"), q.get("min_to_ath"), None),
+                  ("KOL wallets", f.get("w_kol_n"), None, q.get("max_kol_n")))
+        for name, v, lo, hi in checks:
+            if lo is None and hi is None:
+                continue
+            if v is None:
+                return f"{name} unknown"
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                return f"{name} {v:.3g} outside the call range"
+        return None
+
+    def call_block(self, tok: Tok, f: dict, score: float, prob: float | None, now: float) -> str | None:
         """Why this passing token is not called (None = call it)."""
         c = self.cfg.call
+        why = self.quality_block(tok, f)
+        if why:
+            return why
         if tok.id in self.open_tokens():
             return "already an open call"
         if self.db.one("SELECT 1 FROM calls WHERE token_id=? AND ts>?", (tok.id, now - c.token_cooldown_h * 3600)):
@@ -431,6 +462,8 @@ class Engine:
         if self.model is not None and prob is not None:
             thr = max(self.model.thr, float(c.min_prob))
             return None if prob >= thr else f"chance {prob * 100:.0f}% under {thr * 100:.0f}%"
+        if not c.get("scorecard_calls", True):
+            return "no model in use: the scorecard does not call on its own"
         thr = self.call_threshold(now)
         if thr is None:
             return f"warming up ({len(self.scores)}/{c.warmup_snapshots} snapshots)"
@@ -813,7 +846,7 @@ class Engine:
             "following": sum(len(t.follows) for t in self.toks.values()), "open_calls": len(self.positions),
             "by_chain": {c: sum(1 for t in self.toks.values() if t.chain == c) for c in self.cfg.chains},
             "last_sweep_s": {c: round(now - ts) for c, ts in self.sweep_ts.items()},
-            "counts": self.counts, "model": self.model.ver if self.model else None,
+            "counts": {**self.counts, "bad_quotes": self.bad_quotes}, "model": self.model.ver if self.model else None,
             "deciding": "model" if self.model else "tuned scorecard" if self.tuning else "scorecard",
             "call_threshold": self.call_threshold(now), "tuning": self.db.get("tuning_last"),
             "gmgn": {"enabled": g.enabled, "calls": g.calls, "weight_spent": g.spent, "errors": g.errors, "limited": g.limited,

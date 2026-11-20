@@ -145,7 +145,9 @@ class FakeTelegram:
 
 def make_engine(tmp_path, overrides: str = "") -> Engine:
     cfg = load_config()
-    apply_overrides(cfg, f"app.data_dir={tmp_path.as_posix()};call.warmup_snapshots=0;{overrides}")
+    # the pipeline tests exercise the scorecard call path on every chain; the call filters have tests of their own
+    apply_overrides(cfg, f"app.data_dir={tmp_path.as_posix()};call.warmup_snapshots=0;call.scorecard_calls=true;"
+                         f"call.chains=[sol,eth,bsc,base,robinhood];call.evm_require_lp_burned=false;call.quality={{}};{overrides}")
     eng = Engine(cfg)
     eng.gmgn, eng.dex, eng.goplus, eng.telegram, eng.social = FakeGmgn(), FakeDex(), FakeGoPlus(), FakeTelegram(), FakeSocial()
     eng.gecko = FakeGecko()

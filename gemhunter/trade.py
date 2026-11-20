@@ -26,7 +26,8 @@ class Follow:
     done: bool = False
     reason: str | None = None
     dirty: bool = False
-    jump: float | None = None     # a price far off the last one, waiting for a second poll to confirm it
+    jump: float | None = None     # a price far off the last one, waiting for later polls to confirm it
+    jump_n: int = 0
     fast: int | None = None       # the fast grade: 1 hit, 0 not, None still open
     t_fast: float | None = None
 
@@ -36,11 +37,14 @@ class Follow:
             return True
         age = ts - self.ts
         if price and price > 0 and self.last > 0 and not (1 / 25 <= price / self.entry / self.last <= 25):
-            if not (self.jump and 0.5 <= price / self.jump <= 2):
-                self.jump = price                          # unconfirmed jump: wait for the next poll
+            if self.jump and 0.5 <= price / self.jump <= 2:
+                self.jump_n += 1
+            else:
+                self.jump, self.jump_n = price, 1
+            if self.jump_n < 3:                            # unconfirmed jump: two more polls must agree with it
                 price = None
         if price and price > 0:
-            self.jump = None
+            self.jump, self.jump_n = None, 0
             m = price / self.entry
             self.last, self.dirty = m, True
             if m > self.peak:

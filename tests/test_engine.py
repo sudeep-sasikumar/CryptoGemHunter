@@ -229,7 +229,7 @@ async def test_learner_trains_tests_and_promotes(tmp_path):
     assert good > 0.25 and good > 5 * bad
     # with a model in use, the call decision is its probability against its threshold
     tok = await discover(eng)
-    assert eng.call_block(tok, 50, 0.9, time.time()) is None and "chance" in eng.call_block(tok, 99, 0.01, time.time())
+    assert eng.call_block(tok, {}, 50, 0.9, time.time()) is None and "chance" in eng.call_block(tok, {}, 99, 0.01, time.time())
     assert train(eng.db.path, dict(eng.cfg.learn), dict(eng.cfg.call), tmp_path / "m2", None)["n_rows"] == 1500
     eng.db.close()
 
@@ -350,8 +350,10 @@ def test_bad_quotes_are_never_graded(tmp_path):
     assert fl.peak < 2
     g = Follow(2, 1.0, 0.0)
     g.tick(40.0, 50000, 60, L)
-    g.tick(41.0, 50000, 90, L)                           # confirmed on the next poll: a real move
-    assert g.hit and g.peak == 41.0
+    g.tick(41.0, 50000, 90, L)
+    assert not g.hit                                     # one poll agreeing is not enough any more
+    g.tick(40.5, 50000, 120, L)                          # a second one is: a real move
+    assert g.hit and g.peak == 40.5
     eng.db.close()
 
 
@@ -367,3 +369,45 @@ def test_bad_quote_migration(tmp_path):
     db = DB(tmp_path / "gems.db")
     assert db.one("SELECT COUNT(*) n FROM snapshots")["n"] == 1 and db.get("tuning") is None and db.get("migr_bad_quotes_v1") == 2
     db.close()
+
+
+async def test_call_filters_model_bar_quality_chain_and_evm_lp(tmp_path):
+    """The rules from the 20 Nov analysis, with their config as shipped."""
+    eng = make_engine(tmp_path, "call.scorecard_calls=false;call.chains=[sol,eth,bsc];call.evm_require_lp_burned=true;"
+                                "call.quality={max_entrapment_pct: 5, min_vol1h_to_mcap: 0.15, max_vol1h_to_mcap: 1.0, "
+                                "min_to_ath: 0.8, max_kol_n: 9};call.min_prob=0.5")
+    tok = await discover(eng)
+    now = time.time()
+    good = {"h_entrapment_pct": 2.0, "f_vol1h_to_mcap": 0.3, "p_to_ath": 0.9, "w_kol_n": 3, "s_lp_burned": 1}
+    assert eng.call_block(tok, good, 90, None, now) == "no model in use: the scorecard does not call on its own"
+
+    class M:
+        thr, ver = 0.12, "m"
+    eng.model = M()
+    assert eng.call_block(tok, good, 50, 0.55, now) is None
+    assert "chance 30% under 50%" == eng.call_block(tok, good, 50, 0.30, now)              # the bar is 0.5, not the model's 0.12
+    assert "entrapment" in eng.call_block(tok, {**good, "h_entrapment_pct": 12.0}, 50, 0.9, now)
+    assert "turnover" in eng.call_block(tok, {**good, "f_vol1h_to_mcap": 0.05}, 50, 0.9, now)
+    assert "turnover" in eng.call_block(tok, {**good, "f_vol1h_to_mcap": 3.0}, 50, 0.9, now)
+    assert "distance to the high" in eng.call_block(tok, {**good, "p_to_ath": 0.5}, 50, 0.9, now)
+    assert "KOL" in eng.call_block(tok, {**good, "w_kol_n": 15}, 50, 0.9, now)
+    assert eng.call_block(tok, {k: v for k, v in good.items() if k != "p_to_ath"}, 50, 0.9, now) == "distance to the high unknown"
+    tok.chain = "robinhood"
+    assert eng.call_block(tok, good, 50, 0.9, now) == "no calls on robinhood"
+    tok.chain = "eth"
+    assert eng.call_block(tok, {**good, "s_lp_burned": 0}, 50, 0.9, now) == "EVM pool not burned"
+    assert eng.call_block(tok, good, 50, 0.9, now) is None
+    eng.db.close()
+
+
+async def test_jump_the_market_cap_does_not_show_is_dropped(tmp_path):
+    eng = make_engine(tmp_path)
+    tok = await discover(eng)
+    eng.evaluate(tok, time.time())
+    fl = tok.follows[0]
+    now = time.time()
+    eng.on_price(tok, 0.0003 * 3000, 300000, 60000, now + 60)        # price 3000x, market cap unchanged: a bad quote
+    assert fl.peak < 2 and tok.price == 0.0003 and eng.bad_quotes == 1
+    eng.on_price(tok, 0.0003 * 30, 300000 * 30, 60000, now + 120)    # 30x with the market cap agreeing: kept for the follow
+    assert tok.price == 0.0003 * 30
+    eng.db.close()

@@ -126,7 +126,18 @@ call:
   top_pct: 3                 # ... and in the best 3% of every snapshot of the last 7 days
   warmup_snapshots: 200      # no calls until this many snapshots exist to rank against (minutes after a first start)
   max_per_hour: 2
-  min_prob: 0.12             # with a model: minimum chance of a hit
+  min_prob: 0.5              # the model's chance needed for a call (CALL_MIN_PROB). 2026-11-20, live: 78% of gate-passing
+                             # tokens at 0.5+ won (9 tokens) against ~26% at the old 0.12
+  scorecard_calls: false     # the scorecard never calls on its own: on unseen days it ranked winners worse than chance
+                             # (separation 0.42); it stays the benchmark a model must beat
+  chains: [sol, eth, bsc]    # chains calls may go out on; Robinhood (9-16% win) and Base (4%) are still tracked and learned from
+  evm_require_lp_burned: true     # EVM calls only when the LP is burned: both "100% locked" Uniswap v4 calls were pulled
+  quality:                   # every one must hold. Built on 11-16 Nov, then 45% win on 17-20 Nov (20 tokens) vs 25% for all
+    max_entrapment_pct: 5
+    min_vol1h_to_mcap: 0.15
+    max_vol1h_to_mcap: 1.0
+    min_to_ath: 0.8          # within 20% of the high
+    max_kol_n: 9
   target_precision: 0.25
   max_per_day: 6             # CALLS_PER_DAY
   max_open: 12
